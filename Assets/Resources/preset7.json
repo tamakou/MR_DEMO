@@ -1,0 +1,146 @@
+{
+  "version": "1.2.0",
+  "Name": "臓器透過",
+  "Presets": [
+    {
+      "Name": "lung",
+      "Display": 1,
+      "MLut": {
+        "R": 230,
+        "G": 173,
+        "B": 218,
+        "A": 80
+      }
+    },
+    {
+      "Name": "heart",
+      "Display": 1,
+      "MLut": {
+        "R": 249,
+        "G": 138,
+        "B": 95,
+        "A": 80
+      }
+    },
+    {
+      "Name": "artery",
+      "Display": 1,
+      "MLut": {
+        "R": 251,
+        "G": 87,
+        "B": 82,
+        "A": 80
+      }
+    },
+    {
+      "Name": "vein",
+      "Display": 1,
+      "MLut": {
+        "R": 66,
+        "G": 135,
+        "B": 245,
+        "A": 80
+      }
+    },
+    {
+      "Name": "costal_cartilages",
+      "Display": 1,
+      "MLut": {
+        "R": 217,
+        "G": 217,
+        "B": 217,
+        "A": 80
+      }
+    },
+    {
+      "Name": "rib",
+      "Display": 1,
+      "MLut": {
+        "R": 217,
+        "G": 217,
+        "B": 217,
+        "A": 80
+      }
+    },
+    {
+      "Name": "clavicula",
+      "Display": 1,
+      "MLut": {
+        "R": 217,
+        "G": 217,
+        "B": 217,
+        "A": 80
+      }
+    },
+    {
+      "Name": "vertebrae",
+      "Display": 1,
+      "MLut": {
+        "R": 217,
+        "G": 217,
+        "B": 217,
+        "A": 80
+      }
+    },
+    {
+      "Name": "sternum_scapula",
+      "Display": 1,
+      "MLut": {
+        "R": 217,
+        "G": 217,
+        "B": 217,
+        "A": 80
+      }
+    },
+    {
+      "Name": "spinal_cord",
+      "Display": 0,
+      "MLut": {
+        "R": 117,
+        "G": 208,
+        "B": 225,
+        "A": 80
+      }
+    },
+    {
+      "Name": "liver",
+      "Display": 1,
+      "MLut": {
+        "R": 221,
+        "G": 105,
+        "B": 124,
+        "A": 80
+      }
+    },
+    {
+      "Name": "stomach",
+      "Display": 1,
+      "MLut": {
+        "R": 245,
+        "G": 203,
+        "B": 85,
+        "A": 80
+      }
+    },
+    {
+      "Name": "body",
+      "Display": 1,
+      "MLut": {
+        "R": 117,
+        "G": 208,
+        "B": 225,
+        "A": 80
+      }
+    },
+    {
+      "Name": "roi_marker",
+      "Display": 1,
+      "MLut": {
+        "R": 81,
+        "G": 198,
+        "B": 107,
+        "A": 80
+      }
+    }
+  ]
+}
