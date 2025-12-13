@@ -4,260 +4,259 @@ using UnityEngine.UI;
 using UnityEngine.Rendering;
 
 /// <summary>
-/// ƒXƒ‰ƒCƒ_[‚ÅubodyˆÈŠO‚Ì‘ŸŠí‚·‚×‚Äv‚Ì“§‰ß“x(0..255)‚ğˆêŠ‡•ÏX‚·‚éŒy—ÊÀ‘•B
-/// E_BaseColor ‚Ì ƒ¿ ‚ğ MaterialPropertyBlock ‚Åã‘‚«iRGB‚Í•Ûj
-/// Eƒ¿<255 ‚Ì‚Æ‚«‚¾‚¯ URP Transparent ƒoƒŠƒAƒ“ƒg‚É·‚µ‘Ö‚¦Aƒ¿=255 ‚ÅŒ³‚É–ß‚·
-/// EœŠO–¼i—á: "body"j‚Í”z—ñ‚Åw’èB•”•ªˆê’vE‘å•¶š¬•¶š/_/-/‹ó”’‚ğ–³‹B
-/// EPresetManager ‚ª‚ ‚ê‚ÎAƒvƒŠƒZƒbƒg“K—p‚ÉƒOƒ‹[ƒv‚Ì•½‹Ïƒ¿‚ğƒXƒ‰ƒCƒ_[‚É“¯ŠúB
+/// ã‚¹ãƒ©ã‚¤ãƒ€ãƒ¼ã§ã€Œbodyä»¥å¤–ã€ã®å…¨ä½“ã‚’ã¾ã¨ã‚ã¦æ¿ƒåº¦(0..255)ã‚’ä¸€æ‹¬å¤‰æ›´ã™ã‚‹è¦‹æœ¬ã€‚
+/// ãƒ»_BaseColor ã® Î± ã‚’ MaterialPropertyBlock ã§ä¸Šæ›¸ãï¼ˆRGBã¯ç¶­æŒï¼‰
+/// ãƒ»Î±<255 ã®ã¨ãã ã‘ URP Transparent åˆ¤å®šãƒ•ãƒ©ã‚°ã«æ›¸ãæ›ãˆã€Î±=255 ã§å…ƒã«æˆ»ã™
+/// ãƒ»é™¤å¤–ã‚­ãƒ¼ï¼ˆä¾‹: "body"ï¼‰ã¯é…åˆ—ã§æŒ‡å®šã€‚åå‰ï¼ˆã®ä¸€éƒ¨ï¼‰ãŒåˆè‡´ã™ã‚‹ã‚‚ã®ã‚’ç„¡è¦–ã€‚
+/// ãƒ»PresetManager ãŒã‚ã‚Œã°ã€ãƒ—ãƒªã‚»ãƒƒãƒˆé©ç”¨æ™‚ã«ã‚°ãƒ«ãƒ¼ãƒ—ã®å¹³å‡ã‚’ã‚¹ãƒ©ã‚¤ãƒ€ãƒ¼ã«åæ˜ ã€‚
 /// </summary>
 [DisallowMultipleComponent]
 public sealed class GroupAlphaSlider : MonoBehaviour
 {
-  [Header("‘ÎÛ outmesh ‚Ìƒ‹[ƒg")]
-  public Transform outmeshRoot;
+    [Header("å¯¾è±¡ outmesh ã®ãƒ«ãƒ¼ãƒˆ")]
+    public Transform outmeshRoot;
 
-  [Header("œŠOƒL[i—á: bodyjB•”•ªˆê’vE¬•¶š‰»‚µ‚Ä”äŠr")]
-  public string[] excludeKeys = new[] { "body" };
+    [Header("é™¤å¤–ã‚­ãƒ¼ï¼ˆä¾‹: bodyï¼‰ã€‚ã“ã‚Œã‚‰ã‚’å«ã¾ãªã„ã‚‚ã®ã‚’æ“ä½œ")]
+    public string[] excludeKeys = new[] { "body" };
 
-  [Header("UI")]
-  public Slider slider;           // Min=0, Max=255, WholeNumbers=ON ‚ğ„§
-  public Text valueText;          // Others ƒ¿ : 128/255 ‚Ì‚æ‚¤‚É•\¦
+    [Header("UI")]
+    public Slider slider;           // Min=0, Max=255, WholeNumbers=ON ã‚’æ¨å¥¨
+    public Text valueText;          // Others Î± : 128/255 ã®ã‚ˆã†ã«è¡¨ç¤º
 
-  [Header("Preset ˜AŒgi”CˆÓj")]
-  public PresetManager presetManager;
+    [Header("Preset é€£æºï¼ˆä»»æ„ï¼‰")]
+    public PresetManager presetManager;
 
-  // ---- URP ƒvƒƒpƒeƒB
-  static readonly int ID_BaseColor = Shader.PropertyToID("_BaseColor");
-  static readonly int ID_Surface = Shader.PropertyToID("_Surface");
-  static readonly int ID_Blend = Shader.PropertyToID("_Blend");
-  static readonly int ID_SrcBlend = Shader.PropertyToID("_SrcBlend");
-  static readonly int ID_DstBlend = Shader.PropertyToID("_DstBlend");
-  static readonly int ID_AlphaClip = Shader.PropertyToID("_AlphaClip");
-  static readonly int ID_ZWriteCtl = Shader.PropertyToID("_ZWriteControl");
-  static readonly int ID_Cull = Shader.PropertyToID("_Cull");
-  const string KW_SURFACE_TRANSPARENT = "_SURFACE_TYPE_TRANSPARENT";
+    // ---- URP ãƒ—ãƒ­ãƒ‘ãƒ†ã‚£
+    static readonly int ID_BaseColor = Shader.PropertyToID("_BaseColor");
+    static readonly int ID_Surface = Shader.PropertyToID("_Surface");
+    static readonly int ID_Blend = Shader.PropertyToID("_Blend");
+    static readonly int ID_SrcBlend = Shader.PropertyToID("_SrcBlend");
+    static readonly int ID_DstBlend = Shader.PropertyToID("_DstBlend");
+    static readonly int ID_AlphaClip = Shader.PropertyToID("_AlphaClip");
+    static readonly int ID_ZWriteCtl = Shader.PropertyToID("_ZWriteControl");
+    static readonly int ID_Cull = Shader.PropertyToID("_Cull");
+    const string KW_SURFACE_TRANSPARENT = "_SURFACE_TYPE_TRANSPARENT";
 
-  // ‘ÎÛRenderer‚ÆƒTƒuƒƒbƒVƒ…”
-  readonly List<(Renderer r, int subCount)> _targets = new();
+    // å¯¾è±¡Rendererã¨ã‚µãƒ–ãƒ¡ãƒƒã‚·ãƒ¥æ•°
+    readonly List<(Renderer r, int subCount)> _targets = new();
 
-  // “§–¾ƒoƒŠƒAƒ“ƒg^Œ³ƒ}ƒeƒŠƒAƒ‹
-  readonly Dictionary<Renderer, Material[]> _originalShared = new();
-  readonly Dictionary<Material, Material> _transparentCache = new();
+    // å…ƒã®ãƒãƒ†ãƒªã‚¢ãƒ«ãƒ»é€éãƒãƒªã‚¢ãƒ³ãƒˆã‚­ãƒ£ãƒƒã‚·ãƒ¥
+    readonly Dictionary<Renderer, Material[]> _originalShared = new();
+    readonly Dictionary<Material, Material> _transparentCache = new();
 
-  // ƒvƒŠƒZƒbƒg“K—p’l‚Ìˆê•ÛiUI“¯Šú—pj
-  readonly Dictionary<string, int> _lastPresetAByKey = new();
+    // ãƒ—ãƒªã‚»ãƒƒãƒˆé©ç”¨å€¤ã®ä¸€æ™‚ä¿æŒï¼ˆUIå¹³å‡åŒ–ç”¨ï¼‰
+    readonly Dictionary<string, int> _lastPresetAByKey = new();
 
-  MaterialPropertyBlock _mpb;
+    MaterialPropertyBlock _mpb;
 
-  void Awake()
-  {
-    if (outmeshRoot == null) { Debug.LogError("[GroupAlphaSlider] outmeshRoot –¢İ’è"); enabled = false; return; }
-    if (slider == null) { Debug.LogError("[GroupAlphaSlider] slider –¢İ’è"); enabled = false; return; }
-
-    _mpb = new MaterialPropertyBlock();
-    CacheTargets();
-
-    // UI
-    slider.minValue = 0f; slider.maxValue = 255f; slider.wholeNumbers = true;
-    slider.onValueChanged.AddListener(OnSliderChanged);
-    UpdateLabel((int)slider.value);
-
-    // ƒvƒŠƒZƒbƒg˜AŒgi”CˆÓj
-    if (presetManager == null) presetManager = FindFirstObjectByType<PresetManager>();
-    if (presetManager != null)
-      presetManager.OnAlphaApplied += HandlePresetAlphaApplied;
-  }
-
-  void OnDestroy()
-  {
-    if (slider != null) slider.onValueChanged.RemoveListener(OnSliderChanged);
-    if (presetManager != null) presetManager.OnAlphaApplied -= HandlePresetAlphaApplied;
-  }
-
-  // ---------- ƒXƒ‰ƒCƒ_[‘€ìF0..255 ‚ğˆêŠ‡“K—p ----------
-  void OnSliderChanged(float v)
-  {
-    int a255 = Mathf.Clamp(Mathf.RoundToInt(v), 0, 255);
-    ApplyUniformAlpha(a255);
-    UpdateLabel(a255);
-  }
-
-  void ApplyUniformAlpha(int a255)
-  {
-    float af = Mathf.Clamp01(a255 / 255f);
-    bool needsTransparent = a255 < 255;
-
-    foreach (var (r, subCount) in _targets)
+    void Awake()
     {
-      if (!_originalShared.ContainsKey(r))
-        _originalShared[r] = r.sharedMaterials;
+        if (outmeshRoot == null) { Debug.LogError("[GroupAlphaSlider] outmeshRoot æœªè¨­å®š"); enabled = false; return; }
+        if (slider == null) { Debug.LogError("[GroupAlphaSlider] slider æœªè¨­å®š"); enabled = false; return; }
 
-      // ƒ¿‚É‰‚¶‚Ä Transparent Ø‘Ö^•œ‹A
-      if (needsTransparent) AssignTransparent(r);
-      else RestoreOriginal(r);
+        _mpb = new MaterialPropertyBlock();
+        CacheTargets();
 
-      // •Ğ–ÊƒJƒŠƒ“ƒO‚ğˆÛi•‰‰×’áŒ¸j
-      ForceCullBack(r);
+        // UI
+        slider.minValue = 0f; slider.maxValue = 255f; slider.wholeNumbers = true;
+        slider.onValueChanged.AddListener(OnSliderChanged);
+        UpdateLabel((int)slider.value);
 
-      // MPB‚Åƒ¿‚Ì‚İã‘‚«iRGB‚ÍˆÛj
-      for (int i = 0; i < subCount; i++)
-      {
-        _mpb.Clear();
-        r.GetPropertyBlock(_mpb, i);
-        Color col = (_mpb.GetVector(ID_BaseColor) != Vector4.zero)
-                    ? _mpb.GetColor(ID_BaseColor)
-                    : (r.sharedMaterials != null && i < r.sharedMaterials.Length &&
-                       r.sharedMaterials[i] != null && r.sharedMaterials[i].HasProperty(ID_BaseColor))
-                      ? r.sharedMaterials[i].GetColor(ID_BaseColor)
-                      : Color.white;
-        col.a = af;
-
-        _mpb.Clear();
-        _mpb.SetColor(ID_BaseColor, col);
-        r.SetPropertyBlock(_mpb, i);
-      }
+        // ãƒ—ãƒªã‚»ãƒƒãƒˆé€£æºï¼ˆä»»æ„ï¼‰
+        if (presetManager == null) presetManager = FindFirstObjectByType<PresetManager>();
+        if (presetManager != null)
+            presetManager.OnAlphaApplied += HandlePresetAlphaApplied;
     }
-  }
 
-  // ---------- ƒvƒŠƒZƒbƒg“K—pFUI ‚ğ•½‹Ï’l‚Å“¯Šúiƒ‚ƒfƒ‹‘¤‚ÍPresetManager‚ª”½‰fÏ‚İj ----------
-  void HandlePresetAlphaApplied(string keyNormalized, int a255)
-  {
-    if (IsExcludedKey(keyNormalized)) return; // body “™‚Í–³‹
-    _lastPresetAByKey[keyNormalized] = Mathf.Clamp(a255, 0, 255);
-
-    // ƒOƒ‹[ƒv‚Ì•½‹Ï’l‚ğZo‚µ‚ÄƒXƒ‰ƒCƒ_[‚É•\¦‚¾‚¯“¯Šúiã‘‚«‚Í‚µ‚È‚¢j
-    int avg = AveragePresetA();
-    slider.SetValueWithoutNotify(avg);
-    UpdateLabel(avg);
-  }
-
-  int AveragePresetA()
-  {
-    if (_lastPresetAByKey.Count == 0) return (int)slider.value;
-    long sum = 0;
-    foreach (var v in _lastPresetAByKey.Values) sum += v;
-    return Mathf.Clamp(Mathf.RoundToInt(sum / (float)_lastPresetAByKey.Count), 0, 255);
-  }
-
-  // ---------- ‘ÎÛ’ŠoE•â• ----------
-  void CacheTargets()
-  {
-    _targets.Clear();
-    var all = outmeshRoot.GetComponentsInChildren<Renderer>(true);
-    foreach (var r in all)
+    void OnDestroy()
     {
-      if (IsExcludedTransform(r.transform)) continue;
-      _targets.Add((r, r.sharedMaterials?.Length ?? 1));
+        if (slider != null) slider.onValueChanged.RemoveListener(OnSliderChanged);
+        if (presetManager != null) presetManager.OnAlphaApplied -= HandlePresetAlphaApplied;
     }
-    if (_targets.Count == 0)
-      Debug.LogWarning("[GroupAlphaSlider] ‘ÎÛRenderer‚ªŒ©‚Â‚©‚è‚Ü‚¹‚ñiœŠOğŒ‚ªŒµ‚µ‚·‚¬‚é‰Â”\«jB");
-  }
 
-  bool IsExcludedTransform(Transform t)
-  {
-    while (t != null && t != outmeshRoot.parent)
+    // ---------- ã‚¹ãƒ©ã‚¤ãƒ€ãƒ¼æ“ä½œï¼š0..255 ã‚’ä¸€æ‹¬é©ç”¨ ----------
+    void OnSliderChanged(float v)
     {
-      string n = Normalize(t.name);
-      if (IsExcludedKey(n)) return true;
-      t = t.parent;
+        int a255 = Mathf.Clamp(Mathf.RoundToInt(v), 0, 255);
+        ApplyUniformAlpha(a255);
+        UpdateLabel(a255);
     }
-    return false;
-  }
 
-  bool IsExcludedKey(string normalized)  // "body" ‚È‚Ç
-  {
-    if (excludeKeys == null) return false;
-    foreach (var k in excludeKeys)
+    void ApplyUniformAlpha(int a255)
     {
-      if (string.IsNullOrEmpty(k)) continue;
-      if (normalized.Contains(Normalize(k))) return true;
+        float af = Mathf.Clamp01(a255 / 255f);
+        bool needsTransparent = a255 < 255;
+
+        foreach (var (r, subCount) in _targets)
+        {
+            if (!_originalShared.ContainsKey(r))
+                _originalShared[r] = r.sharedMaterials;
+
+            // å¿…è¦ã«å¿œã˜ã¦ Transparent ã¸ç½®æ›ï¼æˆ»ã—
+            if (needsTransparent) AssignTransparent(r);
+            else RestoreOriginal(r);
+
+            // èƒŒé¢ã‚«ãƒªãƒ³ã‚°ç¶­æŒï¼ˆå¿µã®ãŸã‚ï¼‰
+            ForceCullBack(r);
+
+            // MPBã§Î±ã®ã¿ä¸Šæ›¸ãï¼ˆRGBã¯ç¶­æŒï¼‰
+            for (int i = 0; i < subCount; i++)
+            {
+                _mpb.Clear();
+                r.GetPropertyBlock(_mpb, i);
+                Color col = (_mpb.GetVector(ID_BaseColor) != Vector4.zero) // MPBã«è‰²ãŒã‚ã‚Œã°å„ªå…ˆ
+                            ? _mpb.GetColor(ID_BaseColor)
+                            : (r.sharedMaterials != null && i < r.sharedMaterials.Length &&
+                               r.sharedMaterials[i] != null && r.sharedMaterials[i].HasProperty(ID_BaseColor))
+                              ? r.sharedMaterials[i].GetColor(ID_BaseColor)
+                              : Color.white;
+                col.a = af;
+
+                _mpb.Clear();
+                _mpb.SetColor(ID_BaseColor, col);
+                r.SetPropertyBlock(_mpb, i);
+            }
+        }
     }
-    return false;
-  }
 
-  void RestoreOriginal(Renderer r)
-  {
-    if (_originalShared.TryGetValue(r, out var orig))
-      r.sharedMaterials = orig;
-  }
-
-  void AssignTransparent(Renderer r)
-  {
-    var mats = r.sharedMaterials; if (mats == null) return;
-    bool changed = false;
-    for (int i = 0; i < mats.Length; i++)
+    // ---------- ãƒ—ãƒªã‚»ãƒƒãƒˆé©ç”¨æ™‚ï¼šUI ã‚’å¹³å‡å€¤ã§æ›´æ–°ï¼ˆä»–ã§æç”»å¤‰æ›´æ¸ˆï¼‰ ----------
+    void HandlePresetAlphaApplied(string keyNormalized, int a255)
     {
-      var src = mats[i]; if (src == null) continue;
-      if (IsTransparent(src)) continue;
+        if (IsExcludedKey(keyNormalized)) return; // body ç­‰ã¯ç„¡è¦–
+        _lastPresetAByKey[keyNormalized] = Mathf.Clamp(a255, 0, 255);
 
-      if (!_transparentCache.TryGetValue(src, out var v))
-      {
-        v = CreateTransparentVariant(src);
-        _transparentCache[src] = v;
-      }
-      mats[i] = v; changed = true;
+        // ã‚°ãƒ«ãƒ¼ãƒ—ã®å¹³å‡å€¤ã‚’ç®—å‡ºã—ã¦ã‚¹ãƒ©ã‚¤ãƒ€ãƒ¼ã«è¡¨ç¤ºæ›´æ–°ã®ã¿ï¼ˆä¸Šæ›¸ãã¯ã—ãªã„ï¼‰
+        int avg = AveragePresetA();
+        slider.SetValueWithoutNotify(avg);
+        UpdateLabel(avg);
     }
-    if (changed) r.sharedMaterials = mats;
-  }
 
-  static bool IsTransparent(Material m)
-  {
-    bool surf = m.HasProperty(ID_Surface) && m.GetFloat(ID_Surface) > 0.5f;
-    bool kw = m.IsKeywordEnabled(KW_SURFACE_TRANSPARENT);
-    string tag = m.GetTag("RenderType", false);
-    return surf || kw || string.Equals(tag, "Transparent", System.StringComparison.OrdinalIgnoreCase);
-  }
-
-  static Material CreateTransparentVariant(Material src)
-  {
-    var m = new Material(src) { name = src.name + " (TransparentVariant)" };
-    if (m.HasProperty(ID_Surface)) m.SetFloat(ID_Surface, 1f); // Transparent
-    if (m.HasProperty(ID_Blend)) m.SetFloat(ID_Blend, 0f); // Alpha
-    if (m.HasProperty(ID_AlphaClip)) m.SetFloat(ID_AlphaClip, 0f);
-    if (m.HasProperty(ID_SrcBlend)) m.SetInt(ID_SrcBlend, (int)BlendMode.SrcAlpha);
-    if (m.HasProperty(ID_DstBlend)) m.SetInt(ID_DstBlend, (int)BlendMode.OneMinusSrcAlpha);
-    if (m.HasProperty(ID_ZWriteCtl)) m.SetInt(ID_ZWriteCtl, 0);  // Auto
-    if (m.HasProperty(ID_Cull)) m.SetInt(ID_Cull, (int)CullMode.Back);
-    m.EnableKeyword(KW_SURFACE_TRANSPARENT);
-    m.SetOverrideTag("RenderType", "Transparent");
-    m.renderQueue = (int)RenderQueue.Transparent;
-    return m;
-  }
-
-  static void ForceCullBack(Renderer r)
-  {
-    var mats = r.sharedMaterials; if (mats == null) return;
-    bool changed = false;
-    for (int i = 0; i < mats.Length; i++)
+    int AveragePresetA()
     {
-      var m = mats[i];
-      if (m != null && m.HasProperty(ID_Cull))
-      {
-        int cur = (int)m.GetFloat(ID_Cull);
-        if (cur != (int)CullMode.Back) { m.SetInt(ID_Cull, (int)CullMode.Back); changed = true; }
-      }
+        if (_lastPresetAByKey.Count == 0) return (int)slider.value;
+        long sum = 0;
+        foreach (var v in _lastPresetAByKey.Values) sum += v;
+        return Mathf.Clamp(Mathf.RoundToInt(sum / (float)_lastPresetAByKey.Count), 0, 255);
     }
-    if (changed) r.sharedMaterials = mats;
-  }
 
-  static string Normalize(string s)
-  {
-    if (string.IsNullOrEmpty(s)) return "";
-    s = s.ToLowerInvariant();
-    return s.Replace("_", "").Replace("-", "").Replace(" ", "");
-  }
+    // ---------- å¯¾è±¡æ¤œå‡ºãƒ»è£œåŠ© ----------
+    void CacheTargets()
+    {
+        _targets.Clear();
+        var all = outmeshRoot.GetComponentsInChildren<Renderer>(true);
+        foreach (var r in all)
+        {
+            if (IsExcludedTransform(r.transform)) continue;
+            _targets.Add((r, r.sharedMaterials?.Length ?? 1));
+        }
+        if (_targets.Count == 0)
+            Debug.LogWarning("[GroupAlphaSlider] å¯¾è±¡RendererãŒè¦‹ã¤ã‹ã‚Šã¾ã›ã‚“ï¼ˆå…¨ã¦é™¤å¤–ã•ã‚ŒãŸå¯èƒ½æ€§ï¼‰ã€‚");
+    }
 
-  void UpdateLabel(int a255)
-  {
-    if (valueText != null) valueText.text = $"Others ƒ¿ : {a255}/255";
-  }
+    bool IsExcludedTransform(Transform t)
+    {
+        while (t != null && t != outmeshRoot.parent)
+        {
+            string n = Normalize(t.name);
+            if (IsExcludedKey(n)) return true;
+            t = t.parent;
+        }
+        return false;
+    }
 
-  /// <summary>
-  /// GLB ‚ğƒ‰ƒ“ƒ^ƒCƒ€ƒ[ƒh‚µ‚½Œã‚ÉA‘ÎÛ Renderer ‚ğÄƒXƒLƒƒƒ“‚·‚é‚½‚ß‚ÌƒtƒbƒNB
-  /// </summary>
-  public void RefreshTargets()
-  {
-    CacheTargets();
-  }
+    bool IsExcludedKey(string normalized)  // "body" ãªã©
+    {
+        if (excludeKeys == null) return false;
+        foreach (var k in excludeKeys)
+        {
+            if (string.IsNullOrEmpty(k)) continue;
+            if (normalized.Contains(Normalize(k))) return true;
+        }
+        return false;
+    }
+
+    void RestoreOriginal(Renderer r)
+    {
+        if (_originalShared.TryGetValue(r, out var orig))
+            r.sharedMaterials = orig;
+    }
+
+    void AssignTransparent(Renderer r)
+    {
+        var mats = r.sharedMaterials; if (mats == null) return;
+        bool changed = false;
+        for (int i = 0; i < mats.Length; i++)
+        {
+            var src = mats[i]; if (src == null) continue;
+            if (IsTransparent(src)) continue;
+
+            if (!_transparentCache.TryGetValue(src, out var v))
+            {
+                v = CreateTransparentVariant(src);
+                _transparentCache[src] = v;
+            }
+            mats[i] = v; changed = true;
+        }
+        if (changed) r.sharedMaterials = mats;
+    }
+
+    static bool IsTransparent(Material m)
+    {
+        bool surf = m.HasProperty(ID_Surface) && m.GetFloat(ID_Surface) > 0.5f;
+        bool kw = m.IsKeywordEnabled(KW_SURFACE_TRANSPARENT);
+        string tag = m.GetTag("RenderType", false);
+        return surf || kw || string.Equals(tag, "Transparent", System.StringComparison.OrdinalIgnoreCase);
+    }
+
+    static Material CreateTransparentVariant(Material src)
+    {
+        var m = new Material(src) { name = src.name + " (TransparentVariant)" };
+        if (m.HasProperty(ID_Surface)) m.SetFloat(ID_Surface, 1f); // Transparent
+        if (m.HasProperty(ID_Blend)) m.SetFloat(ID_Blend, 0f); // Alpha
+        if (m.HasProperty(ID_AlphaClip)) m.SetFloat(ID_AlphaClip, 0f);
+        if (m.HasProperty(ID_SrcBlend)) m.SetInt(ID_SrcBlend, (int)BlendMode.SrcAlpha);
+        if (m.HasProperty(ID_DstBlend)) m.SetInt(ID_DstBlend, (int)BlendMode.OneMinusSrcAlpha);
+        if (m.HasProperty(ID_ZWriteCtl)) m.SetInt(ID_ZWriteCtl, 0);  // Auto
+        if (m.HasProperty(ID_Cull)) m.SetInt(ID_Cull, (int)CullMode.Back);
+        m.EnableKeyword(KW_SURFACE_TRANSPARENT);
+        m.SetOverrideTag("RenderType", "Transparent");
+        m.renderQueue = (int)RenderQueue.Transparent;
+        return m;
+    }
+
+    static void ForceCullBack(Renderer r)
+    {
+        var mats = r.sharedMaterials; if (mats == null) return;
+        bool changed = false;
+        for (int i = 0; i < mats.Length; i++)
+        {
+            var m = mats[i];
+            if (m != null && m.HasProperty(ID_Cull))
+            {
+                int cur = (int)m.GetFloat(ID_Cull);
+                if (cur != (int)CullMode.Back) { m.SetInt(ID_Cull, (int)CullMode.Back); changed = true; }
+            }
+        }
+        if (changed) r.sharedMaterials = mats;
+    }
+
+    static string Normalize(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        s = s.ToLowerInvariant();
+        return s.Replace("_", "").Replace("-", "").Replace(" ", "");
+    }
+
+    void UpdateLabel(int a255)
+    {
+        if (valueText != null) valueText.text = $"Others Î± : {a255}/255";
+    }
+
+    /// <summary>
+    /// GLB ç­‰ã‚’ãƒ©ãƒ³ã‚¿ã‚¤ãƒ ãƒ­ãƒ¼ãƒ‰ã—ãŸå¾Œã«ã€å¯¾è±¡ Renderer ã‚’å†ã‚¹ã‚­ãƒ£ãƒ³ã™ã‚‹ãŸã‚ã®ãƒ•ãƒƒã‚¯
+    /// </summary>
+    public void RefreshTargets()
+    {
+        CacheTargets();
+    }
 }
-
