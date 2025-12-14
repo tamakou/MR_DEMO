@@ -1,63 +1,152 @@
 using Fusion;
 using System.Collections.Generic;
+using System.Reflection;
 using UnityEngine;
+using UnityEngine.Events;
 using UnityEngine.UI;
 
 /// <summary>
 /// Synchronizes the visual state (Presets and Alpha Sliders) of the Outmesh object.
-/// Requires NetworkObject.
+/// - Fixes:
+///   1) Properly unregisters UI/event listeners on Despawn/Destroy
+///   2) Applies current network state on Spawned() for late-join proxies
 /// </summary>
 [RequireComponent(typeof(NetworkObject))]
 public class OutmeshVisualSync : NetworkBehaviour
 {
-    [Networked]
-    public NetworkString<_32> ActivePreset { get; set; }
+    [Networked] public NetworkString<_32> ActivePreset { get; set; }
 
     // Version counter to trigger updates for the dictionary
-    [Networked]
-    public int AlphaVersion { get; set; }
+    [Networked] public int AlphaVersion { get; set; }
 
     [Networked]
-    [Capacity(32)] // Adjust capacity as needed
+    [Capacity(32)]
     private NetworkDictionary<NetworkString<_32>, int> OrganAlphas { get; }
 
     private ChangeDetector _changeDetector;
     private PresetManager _presetManager;
     private OrganAlphaSlider[] _organSliders;
     private GroupAlphaSlider[] _groupSliders;
+
     private bool _isApplyingNetworkUpdate = false;
+
+    // To remove listeners, we must keep exact delegate instances.
+    private bool _listenersRegistered = false;
+    private readonly Dictionary<Slider, UnityAction<float>> _sliderActions = new();
 
     public override void Spawned()
     {
         _changeDetector = GetChangeDetector(ChangeDetector.Source.SimulationState);
+
         _presetManager = GetComponentInChildren<PresetManager>();
         if (_presetManager == null) _presetManager = FindFirstObjectByType<PresetManager>();
 
-        // Find all OrganAlphaSliders in the scene (or children)
         _organSliders = FindObjectsByType<OrganAlphaSlider>(FindObjectsSortMode.None);
         _groupSliders = FindObjectsByType<GroupAlphaSlider>(FindObjectsSortMode.None);
 
+        RegisterListeners();
+
+        // Late-join / initial apply:
+        // Apply current network state explicitly because ChangeDetector can miss initial values on spawn.
+        if (!Object.HasStateAuthority)
+        {
+            ApplyNetworkPreset();
+            ApplyNetworkAlphas();
+        }
+    }
+
+    public override void Despawned(NetworkRunner runner, bool hasState)
+    {
+        UnregisterListeners();
+    }
+
+    private void OnDestroy()
+    {
+        // In case object is destroyed without Despawned (scene unload etc.)
+        UnregisterListeners();
+    }
+
+    private void RegisterListeners()
+    {
+        if (_listenersRegistered) return;
+        _listenersRegistered = true;
+
         if (_presetManager != null)
         {
+            _presetManager.OnPresetApplied -= OnLocalPresetApplied;
             _presetManager.OnPresetApplied += OnLocalPresetApplied;
         }
 
-        foreach (var sliderScript in _organSliders)
+        _sliderActions.Clear();
+
+        // Organ sliders
+        if (_organSliders != null)
         {
-            var slider = sliderScript.GetComponentInChildren<Slider>();
-            if (slider != null)
+            foreach (var sliderScript in _organSliders)
             {
-                slider.onValueChanged.AddListener((val) => OnLocalSliderChanged(sliderScript, val));
+                if (sliderScript == null) continue;
+
+                var slider = sliderScript.GetComponentInChildren<Slider>();
+                if (slider == null) continue;
+
+                UnityAction<float> action = (val) => OnLocalSliderChanged(sliderScript, val);
+                _sliderActions[slider] = action;
+                slider.onValueChanged.AddListener(action);
             }
         }
 
-        foreach (var groupSlider in _groupSliders)
+        // Group sliders
+        if (_groupSliders != null)
         {
-            var slider = groupSlider.GetComponentInChildren<Slider>();
-            if (slider != null)
+            foreach (var groupSlider in _groupSliders)
             {
-                // Use a special key prefix for groups to avoid collision with organs
-                slider.onValueChanged.AddListener((val) => OnLocalGroupSliderChanged(groupSlider, val));
+                if (groupSlider == null) continue;
+
+                var slider = groupSlider.GetComponentInChildren<Slider>();
+                if (slider == null) continue;
+
+                UnityAction<float> action = (val) => OnLocalGroupSliderChanged(groupSlider, val);
+                _sliderActions[slider] = action;
+                slider.onValueChanged.AddListener(action);
+            }
+        }
+    }
+
+    private void UnregisterListeners()
+    {
+        if (!_listenersRegistered) return;
+        _listenersRegistered = false;
+
+        if (_presetManager != null)
+        {
+            _presetManager.OnPresetApplied -= OnLocalPresetApplied;
+        }
+
+        foreach (var kv in _sliderActions)
+        {
+            var slider = kv.Key;
+            var action = kv.Value;
+
+            if (slider != null)
+                slider.onValueChanged.RemoveListener(action);
+        }
+
+        _sliderActions.Clear();
+    }
+
+    public override void Render()
+    {
+        if (_changeDetector == null) return;
+
+        foreach (var change in _changeDetector.DetectChanges(this))
+        {
+            if (change == nameof(ActivePreset))
+            {
+                ApplyNetworkPreset();
+            }
+            else if (change == nameof(AlphaVersion))
+            {
+                ApplyNetworkAlphas();
             }
         }
     }
@@ -65,9 +154,10 @@ public class OutmeshVisualSync : NetworkBehaviour
     private void OnLocalGroupSliderChanged(GroupAlphaSlider sliderScript, float value)
     {
         if (_isApplyingNetworkUpdate) return;
+        if (sliderScript == null) return;
 
         string key = "GROUP_" + sliderScript.name;
-        int alpha = (int)value;
+        int alpha = Mathf.RoundToInt(value);
 
         if (Object.HasStateAuthority)
         {
@@ -82,33 +172,19 @@ public class OutmeshVisualSync : NetworkBehaviour
         }
     }
 
-
-
-    public override void Render()
-    {
-        foreach (var change in _changeDetector.DetectChanges(this))
-        {
-            if (change == nameof(ActivePreset))
-            {
-                ApplyNetworkPreset();
-            }
-            if (change == nameof(AlphaVersion))
-            {
-                ApplyNetworkAlphas();
-            }
-        }
-    }
-
     private void OnLocalPresetApplied(string presetName)
     {
-        if (Object.HasStateAuthority && !_isApplyingNetworkUpdate)
+        if (_isApplyingNetworkUpdate) return;
+        if (string.IsNullOrEmpty(presetName)) return;
+
+        if (Object.HasStateAuthority)
         {
+            if (ActivePreset.ToString() == presetName) return;
             Debug.Log($"[OutmeshVisualSync] Local Preset Applied: {presetName}. Syncing...");
             ActivePreset = presetName;
         }
-        else if (!_isApplyingNetworkUpdate)
+        else
         {
-            // Request Authority or use RPC to tell Host
             Debug.Log($"[OutmeshVisualSync] Local Preset Applied (Client): {presetName}. Sending RPC...");
             Rpc_SetPreset(presetName);
         }
@@ -117,6 +193,9 @@ public class OutmeshVisualSync : NetworkBehaviour
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     public void Rpc_SetPreset(string presetName)
     {
+        if (string.IsNullOrEmpty(presetName)) return;
+        if (ActivePreset.ToString() == presetName) return;
+
         Debug.Log($"[OutmeshVisualSync] RPC Received: SetPreset {presetName}");
         ActivePreset = presetName;
     }
@@ -124,22 +203,22 @@ public class OutmeshVisualSync : NetworkBehaviour
     private void OnLocalSliderChanged(OrganAlphaSlider sliderScript, float value)
     {
         if (_isApplyingNetworkUpdate) return;
+        if (sliderScript == null) return;
 
         string key = GetOrganKey(sliderScript);
         if (string.IsNullOrEmpty(key)) return;
 
-        int alpha = (int)value;
+        int alpha = Mathf.RoundToInt(value);
 
         if (Object.HasStateAuthority)
         {
             if (OrganAlphas.TryGet(key, out int currentAlpha) && currentAlpha == alpha) return;
 
             OrganAlphas.Set(key, alpha);
-            AlphaVersion++; // Trigger update for others
+            AlphaVersion++;
         }
         else
         {
-            // Send RPC
             Rpc_SetAlpha(key, alpha);
         }
     }
@@ -147,7 +226,8 @@ public class OutmeshVisualSync : NetworkBehaviour
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     public void Rpc_SetAlpha(string key, int value)
     {
-        // Debug.Log($"[OutmeshVisualSync] RPC Received: SetAlpha {key} = {value}"); // Comment out to avoid spam
+        if (string.IsNullOrEmpty(key)) return;
+
         if (OrganAlphas.TryGet(key, out int currentAlpha) && currentAlpha == value) return;
 
         OrganAlphas.Set(key, value);
@@ -156,13 +236,15 @@ public class OutmeshVisualSync : NetworkBehaviour
 
     private void ApplyNetworkPreset()
     {
-        if (_presetManager != null && !string.IsNullOrEmpty(ActivePreset.ToString()))
-        {
-            _isApplyingNetworkUpdate = true;
-            Debug.Log($"[OutmeshVisualSync] Applying Network Preset: {ActivePreset}");
-            _presetManager.ApplyPresetResource(ActivePreset.ToString());
-            _isApplyingNetworkUpdate = false;
-        }
+        if (_presetManager == null) return;
+
+        string preset = ActivePreset.ToString();
+        if (string.IsNullOrEmpty(preset)) return;
+
+        _isApplyingNetworkUpdate = true;
+        Debug.Log($"[OutmeshVisualSync] Applying Network Preset: {preset}");
+        _presetManager.ApplyPresetResource(preset);
+        _isApplyingNetworkUpdate = false;
     }
 
     private void ApplyNetworkAlphas()
@@ -170,24 +252,34 @@ public class OutmeshVisualSync : NetworkBehaviour
         _isApplyingNetworkUpdate = true;
 
         // Sync Organ Sliders
-        foreach (var sliderScript in _organSliders)
+        if (_organSliders != null)
         {
-            string key = GetOrganKey(sliderScript);
-            if (!string.IsNullOrEmpty(key) && OrganAlphas.TryGet(key, out int alpha))
+            foreach (var sliderScript in _organSliders)
             {
-                var slider = sliderScript.GetComponentInChildren<Slider>();
-                if (slider != null) slider.value = alpha;
+                if (sliderScript == null) continue;
+
+                string key = GetOrganKey(sliderScript);
+                if (!string.IsNullOrEmpty(key) && OrganAlphas.TryGet(key, out int alpha))
+                {
+                    var slider = sliderScript.GetComponentInChildren<Slider>();
+                    if (slider != null) slider.value = alpha;
+                }
             }
         }
 
         // Sync Group Sliders
-        foreach (var groupSlider in _groupSliders)
+        if (_groupSliders != null)
         {
-            string key = "GROUP_" + groupSlider.name;
-            if (OrganAlphas.TryGet(key, out int alpha))
+            foreach (var groupSlider in _groupSliders)
             {
-                var slider = groupSlider.GetComponentInChildren<Slider>();
-                if (slider != null) slider.value = alpha;
+                if (groupSlider == null) continue;
+
+                string key = "GROUP_" + groupSlider.name;
+                if (OrganAlphas.TryGet(key, out int alpha))
+                {
+                    var slider = groupSlider.GetComponentInChildren<Slider>();
+                    if (slider != null) slider.value = alpha;
+                }
             }
         }
 
@@ -196,11 +288,13 @@ public class OutmeshVisualSync : NetworkBehaviour
 
     private string GetOrganKey(OrganAlphaSlider script)
     {
-        // Use Reflection to find the key field since we can't easily modify the other script due to encoding issues.
+        // Reflection: fallback chain kept as in original
         var type = script.GetType();
-        var field = type.GetField("organKey", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
-        if (field == null) field = type.GetField("key", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
-        if (field == null) field = type.GetField("Name", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+
+        FieldInfo field =
+            type.GetField("organKey", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) ??
+            type.GetField("key", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) ??
+            type.GetField("Name", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 
         if (field != null)
         {
