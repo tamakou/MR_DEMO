@@ -3,6 +3,7 @@ using UnityEngine;
 
 /// <summary>
 /// コントローラのレイキャストで Shared Anchor の設置位置を決める。
+/// ★修正点：デフォルトで「Yaw固定（Pitch/Rollを入れない）」にして安定化。
 /// </summary>
 public class AnchorPlacementController : MonoBehaviour
 {
@@ -14,6 +15,12 @@ public class AnchorPlacementController : MonoBehaviour
     [Header("Settings")]
     [SerializeField] private LayerMask targetLayer = ~0; // 全レイヤー
     [SerializeField] private float maxDistance = 10f;
+
+    [Tooltip("true: 設置回転をコントローラーYawに固定（推奨：床設置で安定、Yズレ抑制）")]
+    [SerializeField] private bool lockRotationToControllerYaw = true;
+
+    [Tooltip("true: 壁などに置きたい場合に法線合わせを使う（ただしPitch/Rollが入り得る）")]
+    [SerializeField] private bool alignToSurfaceNormal = false;
 
     public Action<Vector3, Quaternion> OnConfirmed;
 
@@ -85,18 +92,28 @@ public class AnchorPlacementController : MonoBehaviour
         Vector3 targetPoint;
         Quaternion targetRotation;
 
+        float yaw = controllerTransform.eulerAngles.y;
+        Quaternion yawRot = Quaternion.Euler(0f, yaw, 0f);
+
         if (Physics.Raycast(ray, out RaycastHit hit, maxDistance, targetLayer))
         {
             targetPoint = hit.point;
 
-            // 衝突した面の法線に対して「上方向」を合わせる。
-            // 床なら Identity、壁なら壁に垂直に立つイメージになる。
-            targetRotation = Quaternion.FromToRotation(Vector3.up, hit.normal);
+            if (alignToSurfaceNormal && !lockRotationToControllerYaw)
+            {
+                // 従来挙動：法線合わせ（壁置き等）
+                targetRotation = Quaternion.FromToRotation(Vector3.up, hit.normal);
+            }
+            else
+            {
+                // ★推奨：Yaw固定（床設置で安定）
+                targetRotation = yawRot;
+            }
         }
         else
         {
             targetPoint = ray.GetPoint(maxDistance);
-            targetRotation = Quaternion.LookRotation(controllerTransform.forward, Vector3.up);
+            targetRotation = lockRotationToControllerYaw ? yawRot : Quaternion.LookRotation(controllerTransform.forward, Vector3.up);
         }
 
         if (_previewInstance != null)

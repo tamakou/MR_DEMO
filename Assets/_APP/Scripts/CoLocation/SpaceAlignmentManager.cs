@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 using Unity.XR.CoreUtils;
 
@@ -8,8 +9,16 @@ public class SpaceAlignmentManager : MonoBehaviour
     [SerializeField] private SharedAnchorManager sharedAnchorManager;
 
     [Header("Alignment Settings")]
-    [Tooltip("アンカー位置を基準(0,0,0)としたときの、ワールド全体のオフセット。\n例えば Y=0.05 にすると、コンテンツ(0,0,0)がアンカーより 5cm 高い位置に表示されます（CameraRigを-0.05下げることで実現）。")]
+    [Tooltip("アンカーを基準にしたいワールド上のターゲット位置。\n例：Vector3.zero にするとアンカー位置がワールド原点に来るように合わせます。")]
     [SerializeField] private Vector3 worldOffset = Vector3.zero;
+
+    [Tooltip("true: アンカー回転はYawのみ採用（推奨：床設置で安定）")]
+    [SerializeField] private bool useYawOnly = true;
+
+    [Tooltip("true: 同じアンカーUUIDに対しては1回だけアライン（繰り返し補正を避ける）")]
+    [SerializeField] private bool alignOnlyOnce = true;
+
+    private Guid? _alignedAnchorUuid;
 
     private void Awake()
     {
@@ -51,7 +60,7 @@ public class SpaceAlignmentManager : MonoBehaviour
 
     /// <summary>
     /// ローカライズされたアンカーを基準に CameraRig を移動・回転する。
-    /// アンカー位置 ＝ ワールド(0,0,0) ＋ worldOffset となるように調整。
+    /// ★修正版：Delta(差分)をRigへ適用する方式。
     /// </summary>
     private void AlignToAnchor(OVRSpatialAnchor anchor)
     {
@@ -60,42 +69,34 @@ public class SpaceAlignmentManager : MonoBehaviour
             Debug.LogError("[SpaceAlignmentManager] CameraRig not found! Cannot align.");
             return;
         }
+        if (anchor == null) return;
 
-        var anchorTransform = anchor.transform;
+        if (alignOnlyOnce && _alignedAnchorUuid.HasValue && _alignedAnchorUuid.Value == anchor.Uuid)
+        {
+            return;
+        }
 
-        Debug.Log(
-            $"[SpaceAlignmentManager] Aligning CameraRig to Anchor: {anchor.Uuid}, " +
-            $"Rig Pos={cameraRig.position}, Anchor Pos={anchorTransform.position}");
+        var aT = anchor.transform;
 
-        // 1. まずアンカーを原点 (0,0,0) に合わせるためのリグ位置を計算
-        //    (アンカー空間における (0,0,0) の座標 = リグを置くべき位置)
-        //    InverseTransformPoint(Vector3.zero) は、アンカーから見た (0,0,0) の相対位置。
-        //    これをリグ位置にセットすると、(0,0,0) がアンカー位置に重なる。
-        Vector3 targetRigPos = anchorTransform.InverseTransformPoint(Vector3.zero);
+        Vector3 anchorPos = aT.position;
+        Quaternion anchorRot = useYawOnly
+            ? Quaternion.Euler(0f, aT.eulerAngles.y, 0f)
+            : aT.rotation;
 
-        // 2. 回転のアラインメント（Y軸回転のみ合わせる）
-        var anchorEuler = anchorTransform.eulerAngles;
-        // リグを -Y 回転させることで、ワールドの正面をアンカーの向きに合わせる
-        Vector3 targetRigRot = new Vector3(0f, -anchorEuler.y, 0f);
+        // 目標：アンカーが worldOffset の位置、回転は(0,0,0)（Yaw=0）に来るようにする
+        Quaternion targetRot = Quaternion.identity;
+        Vector3 targetPos = worldOffset;
 
-        // 3. オフセットの適用
-        //    ワールドを「上にずらしたい (Y+)」なら、リグ（カメラ）を「下にずらす (Y-)」必要がある。
-        //    オフセットはワールド座標系での移動量とみなして引く。
-        //    ただし、Rig の回転も考慮する必要があるため、単純な引き算ではなく Local 空間での調整か、
-        //    あるいはリグ設定後にリグローカルで動かすのが安全。
+        // Delta = target * inverse(current)
+        Quaternion deltaRot = targetRot * Quaternion.Inverse(anchorRot);
+        Vector3 deltaPos = targetPos - (deltaRot * anchorPos);
 
-        // シンプルに「アンカー位置での補正」として計算する。
-        // 「物体を (0.05, 0.05, 0.05) にずらしたい」＝「(0,0,0) にある物体が (0.05...) に見える」
-        // ＝ ワールド全体を (0.05...) ずらす
-        // ＝ リグを (-0.05...) ずらす。
+        // Rig に Delta を適用
+        cameraRig.rotation = deltaRot * cameraRig.rotation;
+        cameraRig.position = deltaRot * cameraRig.position + deltaPos;
 
-        // ここでの worldOffset は「ワールド座標系（回転適用後）」でのシフト量とする。
-        targetRigPos -= worldOffset;
+        _alignedAnchorUuid = anchor.Uuid;
 
-        // 適用
-        cameraRig.position = targetRigPos;
-        cameraRig.eulerAngles = targetRigRot;
-
-        Debug.Log($"[SpaceAlignmentManager] Aligned! New Rig Pos={cameraRig.position}, Rot={cameraRig.rotation.eulerAngles}. Offset applied: {-worldOffset}");
+        Debug.Log($"[SpaceAlignmentManager] Aligned to anchor {anchor.Uuid}. Rig Pos={cameraRig.position}, Rot={cameraRig.rotation.eulerAngles}");
     }
 }

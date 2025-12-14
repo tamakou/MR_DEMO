@@ -1,92 +1,318 @@
 using Fusion;
 using UnityEngine;
 using UnityEngine.XR.Interaction.Toolkit;
+using UnityEngine.XR.Interaction.Toolkit.Interactables;
 
 /// <summary>
-/// Synchronizes the locally loaded OutmeshRoot object across the network using a "Tracker" pattern.
-/// This script should be attached to a separate NetworkObject (the "Tracker") spawned by Fusion.
-/// It finds the local "OutmeshRoot" and syncs its position/rotation.
+/// ★修正版：Outmesh の同期を「Shared Anchor 基準（Anchor Local）」で行う。
+/// - これにより、Host/Client の Unityワールド原点が違っても、3Dモデルの位置ズレ（特にY）を抑制できる。
+///
+/// 使い方：
+/// - このスクリプトは NetworkObject(Tracker) に付ける（FusionがSpawnする側）
+/// - OutmeshRoot(ローカルで存在するモデル) は各端末に存在してOK（ネットワークSpawn不要）
+///
+/// オプション：
+/// - allowClientToDriveViaRpc=true の場合、Clientが掴んでいる間は RPC で StateAuthority(Host) に姿勢を送って追従させる。
+///   （Host/Serverモードで StateAuthority 移譲がうまく行かない場合の保険）
 /// </summary>
 [RequireComponent(typeof(NetworkObject))]
 [RequireComponent(typeof(NetworkTransform))]
 public class OutmeshNetworkSync : NetworkBehaviour
 {
+    [Header("Scene References (optional)")]
+    [SerializeField] private SharedAnchorManager sharedAnchorManager;
+
+    [Tooltip("OutmeshRoot を直接割り当てたい場合（未指定なら名前検索）")]
+    [SerializeField] private Transform outmeshRoot;
+
+    [Tooltip("名前検索するときの OutmeshRoot 名称")]
+    [SerializeField] private string outmeshRootName = "OutmeshRoot";
+
+    [Header("Anchor Frame")]
+    [Tooltip("true: アンカーのYawのみ使用（pitch/rollノイズがYズレを生みやすいため推奨）")]
+    [SerializeField] private bool useYawOnlyAnchorFrame = true;
+
+    [Tooltip("true: この端末でアンカーがローカライズされるまで同期適用しない（ズレた座標を掴まないため推奨）")]
+    [SerializeField] private bool requireLocalizedAnchor = true;
+
+    [Header("Client control (Host stays StateAuthority)")]
+    [Tooltip("true: クライアントが掴んでいる間、RPCでStateAuthorityへ姿勢を送る（Authority移譲に依存しない）")]
+    [SerializeField] private bool allowClientToDriveViaRpc = true;
+
+    [Tooltip("掴み中のRPC送信レート(Hz)")]
+    [SerializeField] private float clientSendRateHz = 20f;
+
+    [Tooltip("位置がこれ未満(m)しか変わっていなければ送らない")]
+    [SerializeField] private float clientSendPosThreshold = 0.002f; // 2mm
+
+    [Tooltip("回転がこれ未満(deg)しか変わっていなければ送らない")]
+    [SerializeField] private float clientSendRotThresholdDeg = 0.5f;
+
+    // ----------------------------------------------------
+
     private Transform _localOutmeshRoot;
-    private UnityEngine.XR.Interaction.Toolkit.Interactables.XRGrabInteractable _grabInteractable;
+    private XRGrabInteractable _grabInteractable;
     private bool _subscribed = false;
+
+    private OVRSpatialAnchor _anchor;
+    private bool _anchorReady = false;
+
+    private double _nextSendTime = 0;
+    private Vector3 _lastSentLocalPos;
+    private Quaternion _lastSentLocalRot = Quaternion.identity;
+    private bool _hasLastSent = false;
 
     public override void Spawned()
     {
+        TryInitializeRefs();
         TryInitializeOutmeshRoot();
+        TryInitializeAnchorFromManager();
+    }
+
+    private void Awake()
+    {
+        if (sharedAnchorManager == null)
+            sharedAnchorManager = FindFirstObjectByType<SharedAnchorManager>();
+    }
+
+    private void OnEnable()
+    {
+        if (sharedAnchorManager == null)
+            sharedAnchorManager = FindFirstObjectByType<SharedAnchorManager>();
+
+        if (sharedAnchorManager != null)
+        {
+            sharedAnchorManager.OnAnchorLocalized -= HandleAnchorLocalized;
+            sharedAnchorManager.OnAnchorLocalized += HandleAnchorLocalized;
+        }
+    }
+
+    private void OnDisable()
+    {
+        if (sharedAnchorManager != null)
+            sharedAnchorManager.OnAnchorLocalized -= HandleAnchorLocalized;
+    }
+
+    private void TryInitializeRefs()
+    {
+        if (sharedAnchorManager == null)
+            sharedAnchorManager = FindFirstObjectByType<SharedAnchorManager>();
+    }
+
+    private void TryInitializeAnchorFromManager()
+    {
+        if (_anchorReady) return;
+
+        if (sharedAnchorManager != null && sharedAnchorManager.TryGetPrimaryAnchor(out var a))
+        {
+            HandleAnchorLocalized(a);
+        }
+    }
+
+    private void HandleAnchorLocalized(OVRSpatialAnchor anchor)
+    {
+        if (anchor == null) return;
+
+        // 基本は「最初のアンカー」を採用（複数ローカライズが来ても基準がブレないように）
+        if (_anchor != null && _anchor.Uuid != anchor.Uuid)
+        {
+            Debug.LogWarning($"[OutmeshNetworkSync] Another anchor localized ({anchor.Uuid}). Keeping the first one ({_anchor.Uuid}).");
+            return;
+        }
+
+        _anchor = anchor;
+        _anchorReady = true;
+
+        Debug.Log($"[OutmeshNetworkSync] Anchor localized. UUID={anchor.Uuid}, Pos={anchor.transform.position}, Rot={anchor.transform.rotation.eulerAngles}");
+
+        // アンカーが用意できた瞬間にスナップ（見た目が一気に揃う）
+        if (_localOutmeshRoot != null && Object != null)
+        {
+            if (Object.HasStateAuthority)
+            {
+                // 今のローカル outmesh の姿勢をネットワーク状態に反映（Anchor Localで）
+                var (lp, lr) = WorldToAnchorLocalPose(_localOutmeshRoot.position, _localOutmeshRoot.rotation);
+                transform.position = lp;
+                transform.rotation = lr;
+            }
+            else
+            {
+                // ネットワーク状態をローカル outmesh に反映
+                ApplyTrackerToOutmesh();
+            }
+        }
     }
 
     private void TryInitializeOutmeshRoot()
     {
-        if (_localOutmeshRoot != null) return; // Already initialized
+        if (_localOutmeshRoot != null) return;
 
-        // Find the local OutmeshRoot object
-        // We assume OutmeshRuntimeLoader creates it with this name.
-        GameObject rootObj = GameObject.Find("OutmeshRoot");
-        if (rootObj != null)
+        if (outmeshRoot != null)
         {
-            _localOutmeshRoot = rootObj.transform;
-            Debug.Log("[OutmeshNetworkSync] Found local OutmeshRoot.");
-
-            // If we are the State Authority (e.g. Host initially), snap the Tracker to the Mesh
-            // Object might be null if called before Spawned(), so check first
-            if (Object != null && Object.HasStateAuthority)
-            {
-                transform.position = _localOutmeshRoot.position;
-                transform.rotation = _localOutmeshRoot.rotation;
-            }
-            // If we are a Client (or Object not ready), snap the Mesh to the Tracker (which has the synced pos)
-            else if (Object != null)
-            {
-                _localOutmeshRoot.position = transform.position;
-                _localOutmeshRoot.rotation = transform.rotation;
-            }
-
-            FindAndSubscribeToGrab();
+            _localOutmeshRoot = outmeshRoot;
         }
         else
         {
-            Debug.LogWarning("[OutmeshNetworkSync] OutmeshRoot not found in scene!");
+            GameObject rootObj = GameObject.Find(outmeshRootName);
+            if (rootObj != null) _localOutmeshRoot = rootObj.transform;
+        }
+
+        if (_localOutmeshRoot == null)
+        {
+            // まだロードされていないだけなので、Updateで再試行
+            return;
+        }
+
+        Debug.Log($"[OutmeshNetworkSync] Found local OutmeshRoot: {_localOutmeshRoot.name}");
+
+        FindAndSubscribeToGrab();
+
+        // 初期スナップ
+        if (Object != null)
+        {
+            if (Object.HasStateAuthority)
+            {
+                if (!requireLocalizedAnchor || _anchorReady)
+                {
+                    var (lp, lr) = WorldToAnchorLocalPose(_localOutmeshRoot.position, _localOutmeshRoot.rotation);
+                    transform.position = lp;
+                    transform.rotation = lr;
+                }
+            }
+            else
+            {
+                if (!requireLocalizedAnchor || _anchorReady)
+                {
+                    ApplyTrackerToOutmesh();
+                }
+            }
         }
     }
 
     public override void FixedUpdateNetwork()
     {
         if (_localOutmeshRoot == null) return;
+        if (requireLocalizedAnchor && !_anchorReady) return;
+
+        bool isLocallyGrabbed = _grabInteractable != null && _grabInteractable.isSelected;
 
         if (Object.HasStateAuthority)
         {
-            // We own the object. Update the NetworkTransform (this object) to match the Local Mesh.
-            // This broadcasts the position to others.
-            transform.position = _localOutmeshRoot.position;
-            transform.rotation = _localOutmeshRoot.rotation;
+            // 重要：リモート（クライアント）操作者がいる場合、まず「Tracker状態→ローカル見た目」を合わせる
+            if (!isLocallyGrabbed)
+            {
+                ApplyTrackerToOutmesh();
+            }
+
+            // その上で、ローカル見た目（＝操作者の入力結果）を Tracker に反映し、他へ配信
+            var (lp, lr) = WorldToAnchorLocalPose(_localOutmeshRoot.position, _localOutmeshRoot.rotation);
+            transform.position = lp;
+            transform.rotation = lr;
         }
         else
         {
-            // We are a proxy.
-            // Check if we are currently grabbing it locally. If so, DO NOT overwrite with network data.
-            // This prevents "fighting" while waiting for authority transfer.
-            bool isLocallyGrabbed = _grabInteractable != null && _grabInteractable.isSelected;
-
             if (!isLocallyGrabbed)
             {
-                // Update the Local Mesh to match the NetworkTransform (this object).
-                _localOutmeshRoot.position = transform.position;
-                _localOutmeshRoot.rotation = transform.rotation;
+                ApplyTrackerToOutmesh();
+            }
+            else if (allowClientToDriveViaRpc)
+            {
+                TrySendGrabbedPoseToStateAuthority();
+            }
+            // allowClientToDriveViaRpc=false なら、従来通り authority移譲を狙う運用（OnGrabbed参照）
+        }
+    }
+
+    private void TrySendGrabbedPoseToStateAuthority()
+    {
+        if (Runner == null || !Runner.IsRunning) return;
+
+        double now = Time.timeAsDouble; // レート制御用途なのでローカル時間でOK
+        double interval = (clientSendRateHz <= 0f) ? 0.0 : 1.0 / clientSendRateHz;
+        if (now < _nextSendTime) return;
+
+        var (lp, lr) = WorldToAnchorLocalPose(_localOutmeshRoot.position, _localOutmeshRoot.rotation);
+
+        if (_hasLastSent)
+        {
+            float dp = Vector3.Distance(_lastSentLocalPos, lp);
+            float da = Quaternion.Angle(_lastSentLocalRot, lr);
+            if (dp < clientSendPosThreshold && da < clientSendRotThresholdDeg)
+            {
+                _nextSendTime = now + interval;
+                return;
             }
         }
+
+        _lastSentLocalPos = lp;
+        _lastSentLocalRot = lr;
+        _hasLastSent = true;
+        _nextSendTime = now + interval;
+
+        Rpc_ClientDrivenPose(lp, lr);
+    }
+
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    private void Rpc_ClientDrivenPose(Vector3 anchorLocalPos, Quaternion anchorLocalRot, RpcInfo info = default)
+    {
+        // ここにバリデーション（速度上限など）を入れたければ追加OK
+        transform.position = anchorLocalPos;
+        transform.rotation = anchorLocalRot;
+    }
+
+    private void ApplyTrackerToOutmesh()
+    {
+        var (wp, wr) = AnchorLocalToWorldPose(transform.position, transform.rotation);
+        _localOutmeshRoot.SetPositionAndRotation(wp, wr);
+    }
+
+    private (Vector3 localPos, Quaternion localRot) WorldToAnchorLocalPose(Vector3 worldPos, Quaternion worldRot)
+    {
+        GetAnchorFrame(out var originPos, out var originRot);
+
+        Vector3 localPos = Quaternion.Inverse(originRot) * (worldPos - originPos);
+        Quaternion localRot = Quaternion.Inverse(originRot) * worldRot;
+        return (localPos, localRot);
+    }
+
+    private (Vector3 worldPos, Quaternion worldRot) AnchorLocalToWorldPose(Vector3 localPos, Quaternion localRot)
+    {
+        GetAnchorFrame(out var originPos, out var originRot);
+
+        Vector3 worldPos = originPos + originRot * localPos;
+        Quaternion worldRot = originRot * localRot;
+        return (worldPos, worldRot);
+    }
+
+    private void GetAnchorFrame(out Vector3 originPos, out Quaternion originRot)
+    {
+        if (_anchor != null)
+        {
+            var t = _anchor.transform;
+            originPos = t.position;
+
+            if (useYawOnlyAnchorFrame)
+                originRot = Quaternion.Euler(0f, t.eulerAngles.y, 0f);
+            else
+                originRot = t.rotation;
+
+            return;
+        }
+
+        originPos = Vector3.zero;
+        originRot = Quaternion.identity;
     }
 
     private void Update()
     {
-        // Retry finding root if missing (OutmeshRoot may be loaded after this object spawns)
         if (_localOutmeshRoot == null)
         {
             TryInitializeOutmeshRoot();
+        }
+
+        if (!_anchorReady)
+        {
+            TryInitializeAnchorFromManager();
         }
 
         if (_localOutmeshRoot != null && !_subscribed)
@@ -101,13 +327,13 @@ public class OutmeshNetworkSync : NetworkBehaviour
 
         if (_grabInteractable == null)
         {
-            // The interactable is likely on the OutmeshRoot or a child
-            _grabInteractable = _localOutmeshRoot.GetComponentInChildren<UnityEngine.XR.Interaction.Toolkit.Interactables.XRGrabInteractable>();
+            _grabInteractable = _localOutmeshRoot.GetComponentInChildren<XRGrabInteractable>();
         }
 
         if (_grabInteractable != null && !_subscribed)
         {
             _grabInteractable.selectEntered.AddListener(OnGrabbed);
+            _grabInteractable.selectExited.AddListener(OnReleased);
             _subscribed = true;
             Debug.Log("[OutmeshNetworkSync] Subscribed to XRGrabInteractable events on local object.");
         }
@@ -118,16 +344,27 @@ public class OutmeshNetworkSync : NetworkBehaviour
         if (_grabInteractable != null)
         {
             _grabInteractable.selectEntered.RemoveListener(OnGrabbed);
+            _grabInteractable.selectExited.RemoveListener(OnReleased);
         }
     }
 
     private void OnGrabbed(SelectEnterEventArgs args)
     {
-        // When grabbed by a local interactor, request authority
-        if (!Object.HasStateAuthority)
+        // allowClientToDriveViaRpc=false のときは従来通り Authority 移譲を狙う
+        if (!allowClientToDriveViaRpc && !Object.HasStateAuthority)
         {
             Debug.Log("[OutmeshNetworkSync] Object grabbed. Requesting State Authority...");
             Object.RequestStateAuthority();
         }
+
+        // RPCレート制御をリセット（掴んだ瞬間に即送る）
+        _nextSendTime = 0;
+        _hasLastSent = false;
+    }
+
+    private void OnReleased(SelectExitEventArgs args)
+    {
+        _nextSendTime = 0;
+        _hasLastSent = false;
     }
 }

@@ -10,6 +10,10 @@ using UnityEngine;
 ///   - OVRSpatialAnchor.ShareAsync(anchors, groupUuid)
 ///   - OVRSpatialAnchor.LoadUnboundSharedAnchorsAsync(groupUuid, list)
 /// を使う実装。
+///
+/// ★修正点：
+/// - OutmeshNetworkSync など別コンポーネントから「現在ローカライズ済みアンカー」を参照できるように
+///   PrimaryAnchor / LastLocalizedAnchor / TryGetPrimaryAnchor を追加。
 /// </summary>
 public class SharedAnchorManager : MonoBehaviour
 {
@@ -30,6 +34,40 @@ public class SharedAnchorManager : MonoBehaviour
     /// <summary> このセッションで使用する SSA グループ UUID（ホストが生成して全クライアントに共有） </summary>
     private Guid? _currentGroupUuid;
     public Guid? CurrentGroupUuid => _currentGroupUuid;
+
+    // -------------------- ★追加：ローカライズ済みアンカー参照（他スクリプト用） --------------------
+    /// <summary> このセッションで「基準にする」アンカー（通常は最初にローカライズしたもの） </summary>
+    public OVRSpatialAnchor PrimaryAnchor { get; private set; }
+
+    /// <summary> 直近にローカライズされたアンカー（複数来た場合の最新） </summary>
+    public OVRSpatialAnchor LastLocalizedAnchor { get; private set; }
+
+    /// <summary>
+    /// OutmeshNetworkSync などが「基準アンカー」を取得するためのAPI。
+    /// </summary>
+    public bool TryGetPrimaryAnchor(out OVRSpatialAnchor anchor)
+    {
+        anchor = PrimaryAnchor != null ? PrimaryAnchor : LastLocalizedAnchor;
+        return anchor != null;
+    }
+
+    private void RegisterLocalizedAnchor(OVRSpatialAnchor anchor)
+    {
+        if (anchor == null) return;
+
+        LastLocalizedAnchor = anchor;
+
+        if (PrimaryAnchor == null)
+        {
+            PrimaryAnchor = anchor;
+            Debug.Log($"[SharedAnchorManager] PrimaryAnchor set. UUID={anchor.Uuid}");
+        }
+        else if (PrimaryAnchor.Uuid != anchor.Uuid)
+        {
+            Debug.LogWarning($"[SharedAnchorManager] Multiple anchors localized. Primary stays {PrimaryAnchor.Uuid}, new={anchor.Uuid}");
+        }
+    }
+    // ---------------------------------------------------------------------------------------------
 
     /// <summary> ColocationNetworkManager からグループ UUID を設定してもらう </summary>
     public void SetGroupUuid(Guid groupUuid)
@@ -151,6 +189,9 @@ public class SharedAnchorManager : MonoBehaviour
         Debug.Log("[SharedAnchorManager] Anchor saved to persistent storage.");
 
         _localAnchor = anchor;
+
+        // ★追加：他コンポーネントが参照できるよう登録
+        RegisterLocalizedAnchor(anchor);
 
         // ホスト側はここで即アライン（共有に失敗してもローカル表示は可能）
         OnAnchorLocalized?.Invoke(anchor);
@@ -306,6 +347,9 @@ public class SharedAnchorManager : MonoBehaviour
 
         Debug.Log($"[SharedAnchorManager] Anchor localized & bound. UUID={anchor.Uuid}, Pos={pose.position}, Rot={pose.rotation.eulerAngles}");
 
+        // ★追加：他コンポーネントが参照できるよう登録
+        RegisterLocalizedAnchor(anchor);
+
         OnStatusMessage?.Invoke("アンカーのローカライズに成功しました。");
         OnAnchorLocalized?.Invoke(anchor);
     }
@@ -335,7 +379,7 @@ public class SharedAnchorManager : MonoBehaviour
 
             case OVRSpatialAnchor.OperationResult.Failure_SpaceNetworkTimeout:
                 return baseMessage + "\nネットワークのタイムアウトが発生しました。\n" +
-                       "Wi‑Fi 接続を確認し、少し待ってから再試行してください。";
+                       "Wi-Fi 接続を確認し、少し待ってから再試行してください。";
 
             case OVRSpatialAnchor.OperationResult.Failure_SpaceNetworkRequestFailed:
                 return baseMessage + "\nネットワーク接続に問題が発生しました。\n" +
