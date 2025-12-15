@@ -11,17 +11,22 @@ using UnityEngine.SceneManagement;
 ///   - ShareAsync(anchors, groupUuid) でクラウド共有
 ///   - クライアントは LoadUnboundSharedAnchorsAsync(groupUuid, ...) でロード
 /// というフローなので、ここで groupUuid を Networked プロパティとして同期する。
+///
+/// ★修正点：
+/// - AnchorUuid / AnchorGroupUuid の到着順に依存しないよう、両方から TryLoadSharedAnchorsIfReady() を呼ぶ
+/// - playerPrefab の全端末 Spawn を削除（Fusion Host モードでは Server のみが Spawn 可能）
+/// - OnDestroy でイベント登録解除を追加
 /// </summary>
 public class ColocationNetworkManager : NetworkBehaviour
 {
     [Header("References")]
     [SerializeField] private NetworkRunner runnerPrefab;
-    [SerializeField] private NetworkObject playerPrefab;
+    [SerializeField] private NetworkObject playerPrefab;            // ※任意：本スクリプト内ではSpawnしない
     [SerializeField] private NetworkObject outmeshTrackerPrefab;
     [SerializeField] private SharedAnchorManager sharedAnchorManager;
     [SerializeField] private AnchorPlacementController placementController;
 
-    /// <summary> アンカー UUID（デバッグ用）。共有自体は groupUuid で行う。 </summary>
+    /// <summary> アンカー UUID（デバッグ用）。共有自体は groupUuid で行うが、"共有完了"の合図にも使う。 </summary>
     [Networked] public NetworkString<_64> AnchorUuid { get; set; }
 
     /// <summary> Shared Spatial Anchors のグループ UUID（ホスト生成 → 全クライアントに同期） </summary>
@@ -33,26 +38,23 @@ public class ColocationNetworkManager : NetworkBehaviour
     private Guid _groupUuid;
     private bool _hasGroupUuid;
 
+    [Header("Client Anchor Load")]
+    [Tooltip("同じフレームで複数回Loadが走るのを避けるためのクールダウン秒数")]
+    [SerializeField] private float anchorLoadCooldownSeconds = 0.5f;
+    private float _lastAnchorLoadAttemptTime = -999f;
+
     private void Awake()
     {
         if (sharedAnchorManager == null)
-        {
             sharedAnchorManager = FindFirstObjectByType<SharedAnchorManager>();
-        }
     }
 
-    /// <summary>
-    /// ホスト起動。
-    /// </summary>
     public async void StartHost()
     {
         if (_localRunner == null) _localRunner = Instantiate(runnerPrefab);
 
         var sceneManager = _localRunner.GetComponent<NetworkSceneManagerDefault>();
-        if (sceneManager == null)
-        {
-            sceneManager = _localRunner.gameObject.AddComponent<NetworkSceneManagerDefault>();
-        }
+        if (sceneManager == null) sceneManager = _localRunner.gameObject.AddComponent<NetworkSceneManagerDefault>();
 
         var sceneRef = SceneRef.FromIndex(SceneManager.GetActiveScene().buildIndex);
         var sceneInfo = new NetworkSceneInfo();
@@ -74,21 +76,19 @@ public class ColocationNetworkManager : NetworkBehaviour
 
         Debug.Log("[ColocationNetworkManager] Host Started");
 
-        // グループUUIDの生成とネットワーク同期は Spawned() で行う
-        // （NetworkObject が Attached になるまで Networked Propertyは書き込めない）
-
         // SharedAnchorManager から「保存＋共有完了したアンカー UUID」を受け取る
-        sharedAnchorManager.OnAnchorCreated -= OnAnchorCreatedByHost;
-        sharedAnchorManager.OnAnchorCreated += OnAnchorCreatedByHost;
+        if (sharedAnchorManager != null)
+        {
+            sharedAnchorManager.OnAnchorCreated -= OnAnchorCreatedByHost;
+            sharedAnchorManager.OnAnchorCreated += OnAnchorCreatedByHost;
+        }
 
-        // アンカーの配置モード開始
+        // アンカー配置モード開始
         if (placementController == null)
         {
             placementController = FindFirstObjectByType<AnchorPlacementController>();
             if (placementController == null)
-            {
                 placementController = gameObject.AddComponent<AnchorPlacementController>();
-            }
         }
 
         placementController.OnConfirmed -= OnAnchorPlacementConfirmed;
@@ -96,16 +96,12 @@ public class ColocationNetworkManager : NetworkBehaviour
         placementController.BeginPlacement();
     }
 
-    /// <summary> クライアント起動。 </summary>
     public async void StartClient()
     {
         if (_localRunner == null) _localRunner = Instantiate(runnerPrefab);
 
         var sceneManager = _localRunner.GetComponent<NetworkSceneManagerDefault>();
-        if (sceneManager == null)
-        {
-            sceneManager = _localRunner.gameObject.AddComponent<NetworkSceneManagerDefault>();
-        }
+        if (sceneManager == null) sceneManager = _localRunner.gameObject.AddComponent<NetworkSceneManagerDefault>();
 
         var sceneRef = SceneRef.FromIndex(SceneManager.GetActiveScene().buildIndex);
         var sceneInfo = new NetworkSceneInfo();
@@ -120,24 +116,14 @@ public class ColocationNetworkManager : NetworkBehaviour
         });
 
         if (result.Ok)
-        {
             Debug.Log("[ColocationNetworkManager] Client Started");
-        }
         else
-        {
             Debug.LogError($"[ColocationNetworkManager] Failed to start Client: {result.ShutdownReason}");
-        }
     }
 
     public override void Spawned()
     {
         _changeDetector = GetChangeDetector(ChangeDetector.Source.SimulationState);
-
-        // ローカルプレイヤーを Spawn（任意）
-        if (Runner.LocalPlayer != null && playerPrefab != null)
-        {
-            Runner.Spawn(playerPrefab, Vector3.zero, Quaternion.identity, Runner.LocalPlayer);
-        }
 
         // Host が Outmesh Tracker を一度だけ Spawn
         if (Runner.IsServer && outmeshTrackerPrefab != null)
@@ -146,34 +132,23 @@ public class ColocationNetworkManager : NetworkBehaviour
             Runner.Spawn(outmeshTrackerPrefab, Vector3.zero, Quaternion.identity);
         }
 
-        // ホスト側: グループUUIDを生成してネットワークに同期
-        // Spawned() で行うことで NetworkObject が Attached 状態であることを保証
+        // ホスト側：グループUUID生成 → ネットワーク同期
         if (Runner.IsServer && !_hasGroupUuid)
         {
             _groupUuid = Guid.NewGuid();
             _hasGroupUuid = true;
             AnchorGroupUuid = _groupUuid.ToString();
+
             Debug.Log($"[ColocationNetworkManager] Generated group UUID in Spawned: {_groupUuid}");
 
             if (sharedAnchorManager != null)
-            {
                 sharedAnchorManager.SetGroupUuid(_groupUuid);
-            }
         }
 
-        // クライアントが途中参加したとき：
+        // クライアント：遅延参加時は「両方そろっていたらロード」を試す
         if (!Runner.IsServer)
         {
-            TryInitGroupFromNetwork();
-
-            string groupStr = AnchorGroupUuid.ToString();
-            string anchorStr = AnchorUuid.ToString();
-
-            if (_hasGroupUuid && !string.IsNullOrEmpty(anchorStr))
-            {
-                Debug.Log($"[ColocationNetworkManager] Late-join client found group {groupStr} and anchor {anchorStr}. Loading shared anchors…");
-                sharedAnchorManager.LoadAnchorsForGroup(_groupUuid);
-            }
+            TryLoadSharedAnchorsIfReady("Spawned (late join)");
         }
     }
 
@@ -185,57 +160,19 @@ public class ColocationNetworkManager : NetworkBehaviour
         {
             if (change == nameof(AnchorUuid))
             {
-                OnAnchorUuidChanged();
+                TryLoadSharedAnchorsIfReady("AnchorUuid changed");
             }
             else if (change == nameof(AnchorGroupUuid))
             {
-                OnAnchorGroupUuidChanged();
+                TryLoadSharedAnchorsIfReady("AnchorGroupUuid changed");
             }
         }
     }
 
-    /// <summary>
-    /// ホスト側：SharedAnchorManager からの通知。
-    /// SaveAnchorAsync + ShareAsync まで成功したアンカーの UUID が来る。
-    /// </summary>
     private void OnAnchorCreatedByHost(Guid uuid)
     {
         Debug.Log($"[ColocationNetworkManager] Host created & shared anchor. Setting Networked UUID: {uuid}");
         AnchorUuid = uuid.ToString();
-    }
-
-    /// <summary>
-    /// クライアント側：AnchorUuid が更新されたとき（＝ホストが共有完了した合図）。
-    /// </summary>
-    private void OnAnchorUuidChanged()
-    {
-        if (Runner.IsServer) return; // ホスト側では何もしない
-
-        TryInitGroupFromNetwork();
-
-        if (!_hasGroupUuid)
-        {
-            Debug.LogWarning("[ColocationNetworkManager] AnchorUuid changed but group UUID is not initialized yet.");
-            return;
-        }
-
-        string uuidStr = AnchorUuid.ToString();
-        Debug.Log($"[ColocationNetworkManager] Anchor UUID Changed: {uuidStr}. Requesting shared anchors for group {_groupUuid}.");
-
-        if (sharedAnchorManager != null)
-        {
-            sharedAnchorManager.LoadAnchorsForGroup(_groupUuid);
-        }
-    }
-
-    /// <summary>
-    /// クライアント側：AnchorGroupUuid が同期されたとき。
-    /// （ここではロードは行わず、UUID の初期化だけをする）
-    /// </summary>
-    private void OnAnchorGroupUuidChanged()
-    {
-        if (Runner.IsServer) return;
-        TryInitGroupFromNetwork();
     }
 
     /// <summary>
@@ -250,47 +187,75 @@ public class ColocationNetworkManager : NetworkBehaviour
         {
             _groupUuid = guid;
             _hasGroupUuid = true;
+
             Debug.Log($"[ColocationNetworkManager] Group UUID initialized from network: {_groupUuid}");
 
             if (sharedAnchorManager != null)
-            {
                 sharedAnchorManager.SetGroupUuid(_groupUuid);
-            }
         }
     }
 
     /// <summary>
-    /// ユーザーがアンカー位置を確定したときに呼ばれる。
-    /// ここを async にして CreateAnchor の完了を正しく待つ。
+    /// クライアント側で「groupUuid と anchorUuid が揃ったらロードする」統一ロジック。
+    /// どちらが先に到着しても、両方揃った時点でロードが走る。
     /// </summary>
+    private void TryLoadSharedAnchorsIfReady(string reason)
+    {
+        if (Runner == null || Runner.IsServer) return;
+
+        if (sharedAnchorManager == null)
+            sharedAnchorManager = FindFirstObjectByType<SharedAnchorManager>();
+
+        TryInitGroupFromNetwork();
+        if (!_hasGroupUuid) return;
+
+        string anchorStr = AnchorUuid.ToString();
+        if (string.IsNullOrEmpty(anchorStr)) return; // 共有完了前はロードしない
+
+        // クールダウンチェック（連続呼び出し防止）
+        if (anchorLoadCooldownSeconds > 0f &&
+            Time.unscaledTime - _lastAnchorLoadAttemptTime < anchorLoadCooldownSeconds)
+        {
+            return;
+        }
+        _lastAnchorLoadAttemptTime = Time.unscaledTime;
+
+        Debug.Log($"[ColocationNetworkManager] {reason}. Loading shared anchors for group {_groupUuid} (anchor={anchorStr})…");
+        sharedAnchorManager?.LoadAnchorsForGroup(_groupUuid);
+    }
+
     private async void OnAnchorPlacementConfirmed(Vector3 pos, Quaternion rot)
     {
         Debug.Log($"[ColocationNetworkManager] Placement Confirmed. Creating Anchor at {pos}");
 
         if (placementController != null)
-        {
             placementController.OnConfirmed -= OnAnchorPlacementConfirmed;
-        }
 
         if (!_hasGroupUuid)
         {
-            Debug.LogWarning("[ColocationNetworkManager] Group UUID is not set when creating anchor. Generating one locally.");
+            // 念のため（通常はSpawnedで設定済み）
             _groupUuid = Guid.NewGuid();
             _hasGroupUuid = true;
             AnchorGroupUuid = _groupUuid.ToString();
 
             if (sharedAnchorManager != null)
-            {
                 sharedAnchorManager.SetGroupUuid(_groupUuid);
-            }
         }
 
         var anchor = await sharedAnchorManager.CreateAnchor(pos, rot);
-
         if (anchor == null)
         {
             Debug.LogError("[ColocationNetworkManager] Anchor creation or sharing failed after placement.");
         }
-        // AnchorUuid の同期は SharedAnchorManager.OnAnchorCreated → OnAnchorCreatedByHost で行われる。
+        // AnchorUuid の同期は SharedAnchorManager.OnAnchorCreated → OnAnchorCreatedByHost で行われる
+    }
+
+    private void OnDestroy()
+    {
+        if (sharedAnchorManager != null)
+            sharedAnchorManager.OnAnchorCreated -= OnAnchorCreatedByHost;
+
+        if (placementController != null)
+            placementController.OnConfirmed -= OnAnchorPlacementConfirmed;
     }
 }

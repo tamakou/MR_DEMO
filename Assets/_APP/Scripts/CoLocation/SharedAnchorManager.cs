@@ -183,6 +183,7 @@ public class SharedAnchorManager : MonoBehaviour
 
             Debug.LogError($"[SharedAnchorManager] SaveAnchorAsync failed. SaveResult={status}");
             OnStatusMessage?.Invoke(msg);
+            Destroy(go);  // ★修正：保存失敗時もGameObjectを破棄
             return null;
         }
 
