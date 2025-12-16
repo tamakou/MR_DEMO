@@ -237,52 +237,58 @@ public class SharedAnchorManager : MonoBehaviour
 
     /// <summary>
     /// グループ UUID を使って Shared Spatial Anchors をロードする（クライアント側のメイン経路）。
+    /// ★修正：0件の場合に自動リトライを行い、_anchorReady が立たない問題を解消。
     /// </summary>
     public async void LoadAnchorsForGroup(Guid groupUuid)
     {
         _currentGroupUuid = groupUuid;
 
-        Debug.Log($"[SharedAnchorManager] Loading shared anchors for group: {groupUuid}");
-        OnStatusMessage?.Invoke("ホストのアンカーをクラウドから取得しています…\n周囲をゆっくり見回してください。");
+        const int maxAttempts = 10;
+        const int delayMs = 1500;
 
-        var unboundAnchors = new List<OVRSpatialAnchor.UnboundAnchor>();
-
-        var result = await OVRSpatialAnchor.LoadUnboundSharedAnchorsAsync(groupUuid, unboundAnchors);
-
-        if (!result.Success)
+        for (int attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            var status = result.Status;
-            string msg = BuildOperationResultMessage(
-                "アンカーの取得に失敗しました。",
-                status);
+            // すでにローカライズ済みなら終了
+            if (PrimaryAnchor != null || LastLocalizedAnchor != null)
+            {
+                OnStatusMessage?.Invoke("アンカーは既にローカライズ済みです。");
+                return;
+            }
 
-            Debug.LogError($"[SharedAnchorManager] LoadUnboundSharedAnchorsAsync failed. Status={status}");
-            OnStatusMessage?.Invoke(msg);
-            return;
+            Debug.Log($"[SharedAnchorManager] Loading shared anchors for group: {groupUuid} (attempt {attempt}/{maxAttempts})");
+            OnStatusMessage?.Invoke($"ホストのアンカーを取得しています… ({attempt}/{maxAttempts})\n周囲をゆっくり見回してください。");
+
+            var unboundAnchors = new List<OVRSpatialAnchor.UnboundAnchor>();
+            var result = await OVRSpatialAnchor.LoadUnboundSharedAnchorsAsync(groupUuid, unboundAnchors);
+
+            if (result.Success && result.Value != null && result.Value.Count > 0)
+            {
+                Debug.Log($"[SharedAnchorManager] Loaded {result.Value.Count} shared unbound anchor(s). Localizing...");
+                OnStatusMessage?.Invoke("アンカーをローカライズしています…");
+
+                foreach (var unbound in result.Value)
+                {
+                    await LocalizeAnchor(unbound);
+                }
+
+                // ローカライズされたら抜ける
+                if (PrimaryAnchor != null || LastLocalizedAnchor != null)
+                {
+                    OnStatusMessage?.Invoke("アンカーのローカライズに成功しました。");
+                    return;
+                }
+            }
+            else
+            {
+                Debug.LogWarning("[SharedAnchorManager] Shared anchors not found yet (0). Will retry...");
+            }
+
+            await System.Threading.Tasks.Task.Delay(delayMs);
         }
 
-        var loaded = result.Value;
-
-        if (loaded == null || loaded.Count == 0)
-        {
-            string msg =
-                "共有アンカーが見つかりませんでした (0件)。\n" +
-                "・ホストがアンカーの共有をまだ完了していない\n" +
-                "・クラウド同期が完了していない\n" +
-                "といった可能性があります。数秒待ってから再度 Join を押してください。";
-            Debug.LogWarning($"[SharedAnchorManager] {msg}");
-            OnStatusMessage?.Invoke(msg);
-            return;
-        }
-
-        Debug.Log($"[SharedAnchorManager] Loaded {loaded.Count} shared unbound anchor(s). Localizing...");
-        OnStatusMessage?.Invoke("アンカーをローカライズしています…");
-
-        foreach (var unbound in loaded)
-        {
-            await LocalizeAnchor(unbound);
-        }
+        OnStatusMessage?.Invoke("共有アンカーを取得できませんでした。\nホストのアンカー付近で周囲を見回し、通信状態を確認して再試行してください。");
     }
+
 
     /// <summary>
     /// （オプション）単一デバイス内で UUID を指定してロードしたい場合用。

@@ -12,6 +12,7 @@ GameObject:
   - component: {fileID: 1989892119329970419}
   - component: {fileID: 7586640530518771469}
   - component: {fileID: 1400497352309069557}
+  - component: {fileID: 7867152140014233867}
   m_Layer: 0
   m_Name: Outmesh Tracker
   m_TagString: Untagged
@@ -53,6 +54,7 @@ MonoBehaviour:
   NetworkedBehaviours:
   - {fileID: 7586640530518771469}
   - {fileID: 1400497352309069557}
+  - {fileID: 7867152140014233867}
   ForceRemoteRenderTimeframe: 0
 --- !u!114 &7586640530518771469
 MonoBehaviour:
@@ -88,3 +90,24 @@ MonoBehaviour:
   SyncParent: 0
   _autoAOIOverride: 1
   DisableSharedModeInterpolation: 0
+--- !u!114 &7867152140014233867
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6480660473513908286}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6ca27bbb4477ab24d93fa2e3fc3690e5, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  sharedAnchorManager: {fileID: 0}
+  outmeshRoot: {fileID: 0}
+  outmeshRootName: OutmeshRoot
+  useYawOnlyAnchorFrame: 1
+  requireLocalizedAnchor: 1
+  allowClientToDriveViaRpc: 1
+  clientSendRateHz: 20
+  clientSendPosThreshold: 0.002
+  clientSendRotThresholdDeg: 0.5

@@ -75,7 +75,13 @@ public class CoLocationUI : MonoBehaviour
                 networkManager.Object.IsValid)
             {
                 string anchorStatus = string.IsNullOrEmpty(networkManager.AnchorUuid.ToString()) ? "None" : "Shared";
-                statusLine = $"Mode: {networkManager.Runner.GameMode}\nAnchor: {anchorStatus}";
+                // ★修正：ローカライズ完了状態も表示
+                string localizedStatus = "No";
+                if (sharedAnchorManager != null && sharedAnchorManager.PrimaryAnchor != null)
+                {
+                    localizedStatus = "Yes";
+                }
+                statusLine = $"Mode: {networkManager.Runner.GameMode}\nAnchor: {anchorStatus}\nLocalized: {localizedStatus}";
             }
 
             statusText.text = $"{statusLine}\n\n{_logBuilder.ToString()}";
@@ -120,9 +126,11 @@ public class CoLocationUI : MonoBehaviour
 
     private void HandleLog(string logString, string stackTrace, UnityEngine.LogType type)
     {
+        // ★修正：OutmeshNetworkSync のログも表示してデバッグしやすくする
         bool isRelevant = logString.Contains("[CoLocationUI]") ||
                           logString.Contains("[ColocationNetworkManager]") ||
                           logString.Contains("[SharedAnchorManager]") ||
+                          logString.Contains("[OutmeshNetworkSync]") ||
                           type == UnityEngine.LogType.Error ||
                           type == UnityEngine.LogType.Exception;
 
