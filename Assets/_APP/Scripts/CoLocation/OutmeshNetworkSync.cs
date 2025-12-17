@@ -206,6 +206,13 @@ public class OutmeshNetworkSync : NetworkBehaviour
 
             // その上で、ローカル見た目（＝操作者の入力結果）を Tracker に反映し、他へ配信
             var (lp, lr) = WorldToAnchorLocalPose(_localOutmeshRoot.position, _localOutmeshRoot.rotation);
+
+            // ★デバッグ：掴んでいる間だけログ出力（毎フレームは多すぎるので）
+            if (isLocallyGrabbed && Time.frameCount % 30 == 0)
+            {
+                Debug.Log($"[OutmeshNetworkSync] HOST GRABBING: TrackerPos={lp}, OutmeshWorldPos={_localOutmeshRoot.position}");
+            }
+
             transform.position = lp;
             transform.rotation = lr;
         }
@@ -213,6 +220,13 @@ public class OutmeshNetworkSync : NetworkBehaviour
         {
             if (!isLocallyGrabbed)
             {
+                // ★デバッグ：Client がネットワーク状態を適用するときのログ
+                if (Time.frameCount % 60 == 0)
+                {
+                    var (wp, wr) = AnchorLocalToWorldPose(transform.position, transform.rotation);
+                    Debug.Log($"[OutmeshNetworkSync] CLIENT APPLY: TrackerPos={transform.position}, ConvertedWorldPos={wp}, CurrentOutmeshPos={_localOutmeshRoot.position}");
+                }
+
                 ApplyTrackerToOutmesh();
             }
             else if (allowClientToDriveViaRpc)
