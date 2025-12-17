@@ -203,12 +203,13 @@ public class OutmeshNetworkSync : NetworkBehaviour
 
         bool isLocallyGrabbed = _grabbedFlag || (_grabInteractable != null && _grabInteractable.isSelected);
 
-        // ★修正：Host が掴んでいないときは ApplyTrackerToOutmesh を呼ばない
-        // 理由：アンカーのトラッキングノイズが毎フレーム座標変換に影響し、モデルが揺れる
-        // Client が RPC で送ってきた場合のみ、Rpc_ClientDrivenPose で transform が更新され、
-        // その値は NetworkTransform 経由で Client に返されるので、ここで適用する必要なし
+        // 重要：リモート（クライアント）操作者がいる場合、まず「Tracker状態→ローカル見た目」を合わせる
+        if (!isLocallyGrabbed)
+        {
+            ApplyTrackerToOutmesh();
+        }
 
-        // ローカル見た目を Tracker に反映し、他へ配信
+        // その上で、ローカル見た目（＝操作者の入力結果）を Tracker に反映し、他へ配信
         var (lp, lr) = WorldToAnchorLocalPose(_localOutmeshRoot.position, _localOutmeshRoot.rotation);
 
         // ★デバッグ：掴んでいる間だけログ出力
@@ -304,12 +305,6 @@ public class OutmeshNetworkSync : NetworkBehaviour
         Debug.Log($"[OutmeshNetworkSync] RECV Rpc_ClientDrivenPose from={info.Source} pos={anchorLocalPos}");
         transform.position = anchorLocalPos;
         transform.rotation = anchorLocalRot;
-
-        // ★追加：Host が Client の操作を受け取ったら、即座にローカル見た目にも反映
-        if (_localOutmeshRoot != null)
-        {
-            ApplyTrackerToOutmesh();
-        }
     }
 
     private void ApplyTrackerToOutmesh()
