@@ -61,6 +61,7 @@ public class OutmeshNetworkSync : NetworkBehaviour
     private Vector3 _lastSentLocalPos;
     private Quaternion _lastSentLocalRot = Quaternion.identity;
     private bool _hasLastSent = false;
+    private bool _grabbedFlag = false;  // ★イベントベースの掘みフラグ
 
     public override void Spawned()
     {
@@ -191,10 +192,19 @@ public class OutmeshNetworkSync : NetworkBehaviour
 
     public override void FixedUpdateNetwork()
     {
+        // ★詳細デバッグ：FixedUpdateNetwork の状態を毎秒ログ
+        if (Time.frameCount % 60 == 0)
+        {
+            bool hasAuth = Object != null && Object.HasStateAuthority;
+            bool grabbed = _grabbedFlag || (_grabInteractable != null && _grabInteractable.isSelected);
+            Debug.Log($"[OutmeshNetworkSync] STATUS: HasAuth={hasAuth}, Root={((_localOutmeshRoot != null) ? "OK" : "NULL")}, AnchorReady={_anchorReady}, Grabbed={grabbed}, GrabbedFlag={_grabbedFlag}");
+        }
+
         if (_localOutmeshRoot == null) return;
         if (requireLocalizedAnchor && !_anchorReady) return;
 
-        bool isLocallyGrabbed = _grabInteractable != null && _grabInteractable.isSelected;
+        // ★修正：イベントベースのフラグも使用（isSelectedが期待通りに動かない場合の保険）
+        bool isLocallyGrabbed = _grabbedFlag || (_grabInteractable != null && _grabInteractable.isSelected);
 
         if (Object.HasStateAuthority)
         {
@@ -207,7 +217,7 @@ public class OutmeshNetworkSync : NetworkBehaviour
             // その上で、ローカル見た目（＝操作者の入力結果）を Tracker に反映し、他へ配信
             var (lp, lr) = WorldToAnchorLocalPose(_localOutmeshRoot.position, _localOutmeshRoot.rotation);
 
-            // ★デバッグ：掴んでいる間だけログ出力（毎フレームは多すぎるので）
+            // ★デバッグ：掴んでいる間だけログ出力
             if (isLocallyGrabbed && Time.frameCount % 30 == 0)
             {
                 Debug.Log($"[OutmeshNetworkSync] HOST GRABBING: TrackerPos={lp}, OutmeshWorldPos={_localOutmeshRoot.position}");
@@ -218,32 +228,41 @@ public class OutmeshNetworkSync : NetworkBehaviour
         }
         else
         {
+            // ★デバッグ：Client がこの分岐に入っているか確認
+            if (Time.frameCount % 60 == 0)
+            {
+                var (wp, wr) = AnchorLocalToWorldPose(transform.position, transform.rotation);
+                Debug.Log($"[OutmeshNetworkSync] CLIENT BRANCH: Grabbed={isLocallyGrabbed}, TrackerPos={transform.position}, ConvertedWorldPos={wp}");
+            }
+
             if (!isLocallyGrabbed)
             {
-                // ★デバッグ：Client がネットワーク状態を適用するときのログ
-                if (Time.frameCount % 60 == 0)
-                {
-                    var (wp, wr) = AnchorLocalToWorldPose(transform.position, transform.rotation);
-                    Debug.Log($"[OutmeshNetworkSync] CLIENT APPLY: TrackerPos={transform.position}, ConvertedWorldPos={wp}, CurrentOutmeshPos={_localOutmeshRoot.position}");
-                }
-
                 ApplyTrackerToOutmesh();
             }
             else if (allowClientToDriveViaRpc)
             {
+                // ★デバッグ：ここに入っているか確認
+                Debug.Log($"[OutmeshNetworkSync] CLIENT CALLING TrySend...");
                 TrySendGrabbedPoseToStateAuthority();
             }
-            // allowClientToDriveViaRpc=false なら、従来通り authority移譲を狙う運用（OnGrabbed参照）
         }
     }
 
     private void TrySendGrabbedPoseToStateAuthority()
     {
-        if (Runner == null || !Runner.IsRunning) return;
+        if (Runner == null || !Runner.IsRunning)
+        {
+            Debug.LogWarning("[OutmeshNetworkSync] TrySend: Runner null or not running");
+            return;
+        }
 
         double now = Time.timeAsDouble; // レート制御用途なのでローカル時間でOK
         double interval = (clientSendRateHz <= 0f) ? 0.0 : 1.0 / clientSendRateHz;
-        if (now < _nextSendTime) return;
+        if (now < _nextSendTime)
+        {
+            // レート制限（頻繁すぎるのでログなし）
+            return;
+        }
 
         var (lp, lr) = WorldToAnchorLocalPose(_localOutmeshRoot.position, _localOutmeshRoot.rotation);
 
@@ -253,6 +272,7 @@ public class OutmeshNetworkSync : NetworkBehaviour
             float da = Quaternion.Angle(_lastSentLocalRot, lr);
             if (dp < clientSendPosThreshold && da < clientSendRotThresholdDeg)
             {
+                // 変化なし（頻繁すぎるのでログなし）
                 _nextSendTime = now + interval;
                 return;
             }
@@ -263,13 +283,14 @@ public class OutmeshNetworkSync : NetworkBehaviour
         _hasLastSent = true;
         _nextSendTime = now + interval;
 
+        Debug.Log($"[OutmeshNetworkSync] SEND Rpc_ClientDrivenPose lp={lp} lr={lr.eulerAngles}");
         Rpc_ClientDrivenPose(lp, lr);
     }
 
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     private void Rpc_ClientDrivenPose(Vector3 anchorLocalPos, Quaternion anchorLocalRot, RpcInfo info = default)
     {
-        // ここにバリデーション（速度上限など）を入れたければ追加OK
+        Debug.Log($"[OutmeshNetworkSync] RECV Rpc_ClientDrivenPose from={info.Source} pos={anchorLocalPos}");
         transform.position = anchorLocalPos;
         transform.rotation = anchorLocalRot;
     }
@@ -364,6 +385,8 @@ public class OutmeshNetworkSync : NetworkBehaviour
 
     private void OnGrabbed(SelectEnterEventArgs args)
     {
+        _grabbedFlag = true;
+
         // allowClientToDriveViaRpc=false のときは従来通り Authority 移譲を狙う
         if (!allowClientToDriveViaRpc && !Object.HasStateAuthority)
         {
@@ -374,11 +397,16 @@ public class OutmeshNetworkSync : NetworkBehaviour
         // RPCレート制御をリセット（掴んだ瞬間に即送る）
         _nextSendTime = 0;
         _hasLastSent = false;
+
+        Debug.Log($"[OutmeshNetworkSync] Grabbed. SA={Object.HasStateAuthority} allowRpc={allowClientToDriveViaRpc}");
     }
 
     private void OnReleased(SelectExitEventArgs args)
     {
+        _grabbedFlag = false;
         _nextSendTime = 0;
         _hasLastSent = false;
+
+        Debug.Log($"[OutmeshNetworkSync] Released. SA={Object.HasStateAuthority}");
     }
 }
