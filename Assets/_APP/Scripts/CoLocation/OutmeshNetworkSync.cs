@@ -192,63 +192,69 @@ public class OutmeshNetworkSync : NetworkBehaviour
 
     public override void FixedUpdateNetwork()
     {
-        // ★詳細デバッグ：FixedUpdateNetwork の状態を毎秒ログ
-        if (Time.frameCount % 60 == 0)
-        {
-            bool hasAuth = Object != null && Object.HasStateAuthority;
-            bool grabbed = _grabbedFlag || (_grabInteractable != null && _grabInteractable.isSelected);
-            Debug.Log($"[OutmeshNetworkSync] STATUS: HasAuth={hasAuth}, Root={((_localOutmeshRoot != null) ? "OK" : "NULL")}, AnchorReady={_anchorReady}, Grabbed={grabbed}, GrabbedFlag={_grabbedFlag}");
-        }
+        // ★FixedUpdateNetwork は StateAuthority (Host) 側でのみ確実に呼ばれる
+        // Client 側は Render() で処理する
 
         if (_localOutmeshRoot == null) return;
         if (requireLocalizedAnchor && !_anchorReady) return;
 
-        // ★修正：イベントベースのフラグも使用（isSelectedが期待通りに動かない場合の保険）
+        // StateAuthority のみ処理
+        if (!Object.HasStateAuthority) return;
+
         bool isLocallyGrabbed = _grabbedFlag || (_grabInteractable != null && _grabInteractable.isSelected);
 
-        if (Object.HasStateAuthority)
+        // ★修正：Host が掴んでいないときは ApplyTrackerToOutmesh を呼ばない
+        // 理由：アンカーのトラッキングノイズが毎フレーム座標変換に影響し、モデルが揺れる
+        // Client が RPC で送ってきた場合のみ、Rpc_ClientDrivenPose で transform が更新され、
+        // その値は NetworkTransform 経由で Client に返されるので、ここで適用する必要なし
+
+        // ローカル見た目を Tracker に反映し、他へ配信
+        var (lp, lr) = WorldToAnchorLocalPose(_localOutmeshRoot.position, _localOutmeshRoot.rotation);
+
+        // ★デバッグ：掴んでいる間だけログ出力
+        if (isLocallyGrabbed && Time.frameCount % 30 == 0)
         {
-            // 重要：リモート（クライアント）操作者がいる場合、まず「Tracker状態→ローカル見た目」を合わせる
-            if (!isLocallyGrabbed)
-            {
-                ApplyTrackerToOutmesh();
-            }
-
-            // その上で、ローカル見た目（＝操作者の入力結果）を Tracker に反映し、他へ配信
-            var (lp, lr) = WorldToAnchorLocalPose(_localOutmeshRoot.position, _localOutmeshRoot.rotation);
-
-            // ★デバッグ：掴んでいる間だけログ出力
-            if (isLocallyGrabbed && Time.frameCount % 30 == 0)
-            {
-                Debug.Log($"[OutmeshNetworkSync] HOST GRABBING: TrackerPos={lp}, OutmeshWorldPos={_localOutmeshRoot.position}");
-            }
-
-            transform.position = lp;
-            transform.rotation = lr;
+            Debug.Log($"[OutmeshNetworkSync] HOST GRABBING: TrackerPos={lp}, OutmeshWorldPos={_localOutmeshRoot.position}");
         }
-        else
-        {
-            // ★デバッグ：Client がこの分岐に入っているか確認
-            if (Time.frameCount % 60 == 0)
-            {
-                var (wp, wr) = AnchorLocalToWorldPose(transform.position, transform.rotation);
-                Debug.Log($"[OutmeshNetworkSync] CLIENT BRANCH: Grabbed={isLocallyGrabbed}, TrackerPos={transform.position}, ConvertedWorldPos={wp}");
-            }
 
-            if (!isLocallyGrabbed)
-            {
-                ApplyTrackerToOutmesh();
-            }
-            else if (allowClientToDriveViaRpc)
-            {
-                // ★デバッグ：ここに入っているか確認
-                Debug.Log($"[OutmeshNetworkSync] CLIENT CALLING TrySend...");
-                TrySendGrabbedPoseToStateAuthority();
-            }
+        transform.position = lp;
+        transform.rotation = lr;
+    }
+
+    /// <summary>
+    /// Render() は全端末で毎フレーム呼ばれる。Client (Proxy) の処理はここで行う。
+    /// </summary>
+    public override void Render()
+    {
+        if (_localOutmeshRoot == null) return;
+        if (requireLocalizedAnchor && !_anchorReady) return;
+
+        // StateAuthority は FixedUpdateNetwork で処理済み
+        if (Object.HasStateAuthority) return;
+
+        bool isLocallyGrabbed = _grabbedFlag || (_grabInteractable != null && _grabInteractable.isSelected);
+
+        // ★デバッグ：Client の状態を毎秒ログ
+        if (Time.frameCount % 60 == 0)
+        {
+            var (wp, wr) = AnchorLocalToWorldPose(transform.position, transform.rotation);
+            Debug.Log($"[OutmeshNetworkSync] CLIENT RENDER: Grabbed={isLocallyGrabbed}, TrackerPos={transform.position}, ConvertedWorldPos={wp}");
+        }
+
+        if (!isLocallyGrabbed)
+        {
+            // 掴んでいないときは、ネットワーク状態をローカルに反映
+            ApplyTrackerToOutmesh();
+        }
+        else if (allowClientToDriveViaRpc)
+        {
+            // 掴んでいるときは、ローカル状態を Host に送信
+            Debug.Log($"[OutmeshNetworkSync] CLIENT CALLING TrySend...");
+            TrySendGrabbedPoseToStateAuthority();
         }
     }
 
-    private void TrySendGrabbedPoseToStateAuthority()
+    private void TrySendGrabbedPoseToStateAuthority(bool force = false)
     {
         if (Runner == null || !Runner.IsRunning)
         {
@@ -256,23 +262,28 @@ public class OutmeshNetworkSync : NetworkBehaviour
             return;
         }
 
-        double now = Time.timeAsDouble; // レート制御用途なのでローカル時間でOK
+        double now = Time.timeAsDouble;
         double interval = (clientSendRateHz <= 0f) ? 0.0 : 1.0 / clientSendRateHz;
-        if (now < _nextSendTime)
+
+        if (!force && now < _nextSendTime)
         {
-            // レート制限（頻繁すぎるのでログなし）
+            // レート制限（デバッグ用にたまにログ）
+            if (Time.frameCount % 30 == 0)
+                Debug.Log($"[OutmeshNetworkSync] TrySend: rate limited now={now:F2} next={_nextSendTime:F2}");
             return;
         }
 
         var (lp, lr) = WorldToAnchorLocalPose(_localOutmeshRoot.position, _localOutmeshRoot.rotation);
 
-        if (_hasLastSent)
+        if (!force && _hasLastSent)
         {
             float dp = Vector3.Distance(_lastSentLocalPos, lp);
             float da = Quaternion.Angle(_lastSentLocalRot, lr);
             if (dp < clientSendPosThreshold && da < clientSendRotThresholdDeg)
             {
-                // 変化なし（頻繁すぎるのでログなし）
+                // 変化なし（デバッグ用にたまにログ）
+                if (Time.frameCount % 30 == 0)
+                    Debug.Log($"[OutmeshNetworkSync] TrySend: below threshold dp={dp:F4} da={da:F3}");
                 _nextSendTime = now + interval;
                 return;
             }
@@ -293,6 +304,12 @@ public class OutmeshNetworkSync : NetworkBehaviour
         Debug.Log($"[OutmeshNetworkSync] RECV Rpc_ClientDrivenPose from={info.Source} pos={anchorLocalPos}");
         transform.position = anchorLocalPos;
         transform.rotation = anchorLocalRot;
+
+        // ★追加：Host が Client の操作を受け取ったら、即座にローカル見た目にも反映
+        if (_localOutmeshRoot != null)
+        {
+            ApplyTrackerToOutmesh();
+        }
     }
 
     private void ApplyTrackerToOutmesh()
@@ -399,6 +416,13 @@ public class OutmeshNetworkSync : NetworkBehaviour
         _hasLastSent = false;
 
         Debug.Log($"[OutmeshNetworkSync] Grabbed. SA={Object.HasStateAuthority} allowRpc={allowClientToDriveViaRpc}");
+
+        // ★追加：Clientが掴んだ瞬間、必ず1回はHost(StateAuthority)へ送る
+        if (allowClientToDriveViaRpc && Object != null && !Object.HasStateAuthority)
+        {
+            Debug.Log("[OutmeshNetworkSync] Grabbed: force send first pose");
+            TrySendGrabbedPoseToStateAuthority(force: true);
+        }
     }
 
     private void OnReleased(SelectExitEventArgs args)

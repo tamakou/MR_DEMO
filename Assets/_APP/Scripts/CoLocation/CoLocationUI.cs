@@ -14,7 +14,7 @@ public class CoLocationUI : MonoBehaviour
     [SerializeField] private SharedAnchorManager sharedAnchorManager;
 
     private System.Text.StringBuilder _logBuilder = new System.Text.StringBuilder();
-    private const int MaxLogLines = 15;
+    private const int MaxLogLines = 40;
 
     private void Start()
     {
